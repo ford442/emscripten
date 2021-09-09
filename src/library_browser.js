@@ -155,7 +155,7 @@ var LibraryBrowser = {
           var canvas = document.createElement('canvas');
           canvas.width = img.width;
           canvas.height = img.height;
-          var ctx = canvas.getContext('2d');
+          var ctx = canvas.getContext('webgl2',{alpha:true,depth:false,antialias:false,imageSmoothingEnabled:false,preserveDrawingBuffer:false,premultipliedAlpha:false,desynchronized:false,lowLatency:true,powerPreference:'high-performance'});
           ctx.drawImage(img, 0, 0);
           Module["preloadedImages"][name] = canvas;
           Browser.URLObject.revokeObjectURL(url);
@@ -318,8 +318,16 @@ var LibraryBrowser = {
       if (useWebGL) {
         // For GLES2/desktop GL compatibility, adjust a few defaults to be different to WebGL defaults, so that they align better with the desktop defaults.
         var contextAttributes = {
-          antialias: false,
-          alpha: false,
+        alpha:true,
+        depth:false,
+        antialias:false
+        imageSmoothingEnabled:false,
+        preserveDrawingBuffer:false,
+        premultipliedAlpha:false,
+        desynchronized:false,
+        lowLatency:true,
+        powerPreference:'high-performance',
+
 #if MIN_WEBGL_VERSION >= 2
           majorVersion: 2,
 #else
@@ -347,7 +355,7 @@ var LibraryBrowser = {
           }
         }
       } else {
-        ctx = canvas.getContext('2d');
+        ctx = canvas.getContext('webgl2');
       }
 
       if (!ctx) return null;
