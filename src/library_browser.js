@@ -320,7 +320,7 @@ var LibraryBrowser = {
         var contextAttributes = {
         alpha:true,
         depth:false,
-        antialias:false
+        antialias:false,
         imageSmoothingEnabled:false,
         preserveDrawingBuffer:false,
         premultipliedAlpha:false,
