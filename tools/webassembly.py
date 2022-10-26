@@ -8,36 +8,18 @@
 
 from collections import namedtuple
 from enum import IntEnum
+from functools import wraps
 import logging
 import os
 import sys
 
-from . import shared
 from . import utils
-from .settings import settings
 
-sys.path.append(shared.path_from_root('third_party'))
+sys.path.append(utils.path_from_root('third_party'))
 
 import leb128
 
-logger = logging.getLogger('shared')
-
-
-# For the Emscripten-specific WASM metadata section, follows semver, changes
-# whenever metadata section changes structure.
-# NB: major version 0 implies no compatibility
-# NB: when changing the metadata format, we should only append new fields, not
-#     reorder, modify, or remove existing ones.
-EMSCRIPTEN_METADATA_MAJOR, EMSCRIPTEN_METADATA_MINOR = (0, 3)
-# For the JS/WASM ABI, specifies the minimum ABI version required of
-# the WASM runtime implementation by the generated WASM binary. It follows
-# semver and changes whenever C types change size/signedness or
-# syscalls change signature. By semver, the maximum ABI version is
-# implied to be less than (EMSCRIPTEN_ABI_MAJOR + 1, 0). On an ABI
-# change, increment EMSCRIPTEN_ABI_MINOR if EMSCRIPTEN_ABI_MAJOR == 0
-# or the ABI change is backwards compatible, otherwise increment
-# EMSCRIPTEN_ABI_MAJOR and set EMSCRIPTEN_ABI_MINOR = 0.
-EMSCRIPTEN_ABI_MAJOR, EMSCRIPTEN_ABI_MINOR = (0, 29)
+logger = logging.getLogger('webassembly')
 
 WASM_PAGE_SIZE = 65536
 
@@ -49,66 +31,103 @@ HEADER_SIZE = 8
 
 LIMITS_HAS_MAX = 0x1
 
+SEG_PASSIVE = 0x1
 
-def toLEB(num):
+PREFIX_MATH = 0xfc
+PREFIX_THREADS = 0xfe
+PREFIX_SIMD = 0xfd
+
+SYMBOL_BINDING_MASK = 0x3
+SYMBOL_BINDING_GLOBAL = 0x0
+SYMBOL_BINDING_WEAK = 0x1
+SYMBOL_BINDING_LOCAL = 0x2
+
+
+def to_leb(num):
   return leb128.u.encode(num)
 
 
-def readULEB(iobuf):
+def read_uleb(iobuf):
   return leb128.u.decode_reader(iobuf)[0]
 
 
-def readSLEB(iobuf):
+def read_sleb(iobuf):
   return leb128.i.decode_reader(iobuf)[0]
 
 
-def add_emscripten_metadata(wasm_file):
-  mem_size = settings.INITIAL_MEMORY // WASM_PAGE_SIZE
-  global_base = settings.GLOBAL_BASE
+def memoize(method):
 
-  logger.debug('creating wasm emscripten metadata section with mem size %d' % mem_size)
-  name = b'\x13emscripten_metadata' # section name, including prefixed size
-  contents = (
-    # metadata section version
-    toLEB(EMSCRIPTEN_METADATA_MAJOR) +
-    toLEB(EMSCRIPTEN_METADATA_MINOR) +
+  @wraps(method)
+  def wrapper(self, *args, **kwargs):
+    assert not kwargs
+    key = method
+    if key not in self._cache:
+      self._cache[key] = method(self, *args, **kwargs)
+    return self._cache[key]
 
-    # NB: The structure of the following should only be changed
-    #     if EMSCRIPTEN_METADATA_MAJOR is incremented
-    # Minimum ABI version
-    toLEB(EMSCRIPTEN_ABI_MAJOR) +
-    toLEB(EMSCRIPTEN_ABI_MINOR) +
+  return wrapper
 
-    # Wasm backend, always 1 now
-    toLEB(1) +
 
-    toLEB(mem_size) +
-    toLEB(0) +
-    toLEB(global_base) +
-    toLEB(0) +
-    # dynamictopPtr, always 0 now
-    toLEB(0) +
+def once(method):
 
-    # tempDoublePtr, always 0 in wasm backend
-    toLEB(0) +
+  @wraps(method)
+  def helper(self, *args, **kwargs):
+    key = method
+    if key not in self._cache:
+      self._cache[key] = method(self, *args, **kwargs)
 
-    toLEB(int(settings.STANDALONE_WASM))
+  return helper
 
-    # NB: more data can be appended here as long as you increase
-    #     the EMSCRIPTEN_METADATA_MINOR
-  )
 
-  orig = utils.read_binary(wasm_file)
-  with open(wasm_file, 'wb') as f:
-    f.write(orig[0:8]) # copy magic number and version
-    # write the special section
-    f.write(b'\0') # user section is code 0
-    # need to find the size of this section
-    size = len(name) + len(contents)
-    f.write(toLEB(size))
-    f.write(name)
-    f.write(contents)
-    f.write(orig[8:])
+class Type(IntEnum):
+  I32 = 0x7f # -0x1
+  I64 = 0x7e # -0x2
+  F32 = 0x7d # -0x3
+  F64 = 0x7c # -0x4
+  V128 = 0x7b # -0x5
+  FUNCREF = 0x70 # -0x10
+  EXTERNREF = 0x6f # -0x11
+  VOID = 0x40 # -0x40
+
+
+class OpCode(IntEnum):
+  NOP = 0x01
+  BLOCK = 0x02
+  END = 0x0b
+  BR = 0x0c
+  BR_TABLE = 0x0e
+  CALL = 0x10
+  DROP = 0x1a
+  LOCAL_GET = 0x20
+  LOCAL_SET = 0x21
+  LOCAL_TEE = 0x22
+  GLOBAL_GET = 0x23
+  GLOBAL_SET = 0x24
+  RETURN = 0x0f
+  I32_CONST = 0x41
+  I64_CONST = 0x42
+  F32_CONST = 0x43
+  F64_CONST = 0x44
+  I32_ADD = 0x6a
+  I64_ADD = 0x6b
+  REF_NULL = 0xd0
+  ATOMIC_PREFIX = 0xfe
+  MEMORY_PREFIX = 0xfc
+
+
+class MemoryOpCode(IntEnum):
+  MEMORY_INIT = 0x08
+  MEMORY_DROP = 0x09
+  MEMORY_COPY = 0x0a
+  MEMORY_FILL = 0x0b
+
+
+class AtomicOpCode(IntEnum):
+  ATOMIC_NOTIFY = 0x00
+  ATOMIC_WAIT32 = 0x01
+  ATOMIC_WAIT64 = 0x02
+  ATOMIC_I32_STORE = 0x17
+  ATOMIC_I32_RMW_CMPXCHG = 0x48
 
 
 class SecType(IntEnum):
@@ -118,7 +137,7 @@ class SecType(IntEnum):
   FUNCTION = 3
   TABLE = 4
   MEMORY = 5
-  EVENT = 13
+  TAG = 13
   GLOBAL = 6
   EXPORT = 7
   START = 8
@@ -133,131 +152,424 @@ class ExternType(IntEnum):
   TABLE = 1
   MEMORY = 2
   GLOBAL = 3
-  EVENT = 4
+  TAG = 4
 
 
-Section = namedtuple('Section', ['type', 'size', 'offset'])
+class DylinkType(IntEnum):
+  MEM_INFO = 1
+  NEEDED = 2
+  EXPORT_INFO = 3
+  IMPORT_INFO = 4
+
+
+class InvalidWasmError(BaseException):
+  pass
+
+
+Section = namedtuple('Section', ['type', 'size', 'offset', 'name'])
 Limits = namedtuple('Limits', ['flags', 'initial', 'maximum'])
-Import = namedtuple('Import', ['kind', 'module', 'field'])
+Import = namedtuple('Import', ['kind', 'module', 'field', 'type'])
 Export = namedtuple('Export', ['name', 'kind', 'index'])
-Dylink = namedtuple('Dylink', ['mem_size', 'mem_align', 'table_size', 'table_align', 'needed'])
+Global = namedtuple('Global', ['type', 'mutable', 'init'])
+Dylink = namedtuple('Dylink', ['mem_size', 'mem_align', 'table_size', 'table_align', 'needed', 'export_info', 'import_info'])
+Table = namedtuple('Table', ['elem_type', 'limits'])
+FunctionBody = namedtuple('FunctionBody', ['offset', 'size'])
+DataSegment = namedtuple('DataSegment', ['flags', 'init', 'offset', 'size'])
+FuncType = namedtuple('FuncType', ['params', 'returns'])
 
 
 class Module:
   """Extremely minimal wasm module reader.  Currently only used
   for parsing the dylink section."""
   def __init__(self, filename):
+    self.buf = None # Set this before FS calls below in case they throw.
+    self.filename = filename
     self.size = os.path.getsize(filename)
     self.buf = open(filename, 'rb')
     magic = self.buf.read(4)
     version = self.buf.read(4)
-    assert magic == MAGIC
-    assert version == VERSION
+    if magic != MAGIC or version != VERSION:
+      raise InvalidWasmError(f'{filename} is not a valid wasm file')
+    self._cache = {}
 
   def __del__(self):
-    self.buf.close()
+    assert not self.buf, '`__exit__` should have already been called, please use context manager'
 
-  def readByte(self):
+  def __enter__(self):
+    return self
+
+  def __exit__(self, _exc_type, _exc_val, _exc_tb):
+    if self.buf:
+      self.buf.close()
+      self.buf = None
+
+  def read_at(self, offset, count):
+    self.buf.seek(offset)
+    return self.buf.read(count)
+
+  def read_byte(self):
     return self.buf.read(1)[0]
 
-  def readULEB(self):
-    return readULEB(self.buf)
+  def read_uleb(self):
+    return read_uleb(self.buf)
 
-  def readSLEB(self):
-    return readSLEB(self.buf)
+  def read_sleb(self):
+    return read_sleb(self.buf)
 
-  def readString(self):
-    size = self.readULEB()
+  def read_string(self):
+    size = self.read_uleb()
     return self.buf.read(size).decode('utf-8')
 
-  def readLimits(self):
-    flags = self.readByte()
-    initial = self.readULEB()
+  def read_limits(self):
+    flags = self.read_byte()
+    initial = self.read_uleb()
     maximum = 0
     if flags & LIMITS_HAS_MAX:
-      maximum = self.readULEB()
+      maximum = self.read_uleb()
     return Limits(flags, initial, maximum)
 
+  def read_type(self):
+    return Type(self.read_uleb())
+
+  def read_init(self):
+    code = []
+    while 1:
+      opcode = OpCode(self.read_byte())
+      args = []
+      if opcode in (OpCode.GLOBAL_GET, OpCode.I32_CONST, OpCode.I64_CONST):
+        args.append(self.read_uleb())
+      elif opcode in (OpCode.REF_NULL,):
+        args.append(self.read_type())
+      elif opcode in (OpCode.END, OpCode.I32_ADD, OpCode.I64_ADD):
+        pass
+      else:
+        raise Exception('unexpected opcode %s' % opcode)
+      code.append((opcode, args))
+      if opcode == OpCode.END:
+        break
+    return code
+
   def seek(self, offset):
-    self.buf.seek(offset)
+    return self.buf.seek(offset)
+
+  def tell(self):
+    return self.buf.tell()
+
+  def skip(self, count):
+    self.buf.seek(count, os.SEEK_CUR)
 
   def sections(self):
     """Generator that lazily returns sections from the wasm file."""
     offset = HEADER_SIZE
     while offset < self.size:
       self.seek(offset)
-      section_type = SecType(self.readByte())
-      section_size = self.readULEB()
+      section_type = SecType(self.read_byte())
+      section_size = self.read_uleb()
       section_offset = self.buf.tell()
-      yield Section(section_type, section_size, section_offset)
+      name = None
+      if section_type == SecType.CUSTOM:
+        name = self.read_string()
+
+      yield Section(section_type, section_size, section_offset, name)
       offset = section_offset + section_size
+
+  @memoize
+  def get_types(self):
+    type_section = self.get_section(SecType.TYPE)
+    if not type_section:
+      return []
+    self.seek(type_section.offset)
+    num_types = self.read_uleb()
+    types = []
+    for _ in range(num_types):
+      type_form = self.read_byte()
+      assert type_form == 0x60
+
+      params = []
+      num_params = self.read_uleb()
+      for _ in range(num_params):
+        params.append(self.read_type())
+
+      returns = []
+      num_returns = self.read_uleb()
+      for _ in range(num_returns):
+        returns.append(self.read_type())
+
+      types.append(FuncType(params, returns))
+
+    return types
+
+  def parse_features_section(self):
+    features = []
+    sec = self.get_custom_section('target_features')
+    if sec:
+      self.seek(sec.offset)
+      self.read_string()  # name
+      feature_count = self.read_uleb()
+      while feature_count:
+        prefix = self.read_byte()
+        features.append((chr(prefix), self.read_string()))
+        feature_count -= 1
+    return features
+
+  @memoize
+  def parse_dylink_section(self):
+    dylink_section = next(self.sections())
+    assert dylink_section.type == SecType.CUSTOM
+    self.seek(dylink_section.offset)
+    # section name
+    needed = []
+    export_info = {}
+    import_info = {}
+    self.read_string()  # name
+
+    if dylink_section.name == 'dylink':
+      mem_size = self.read_uleb()
+      mem_align = self.read_uleb()
+      table_size = self.read_uleb()
+      table_align = self.read_uleb()
+
+      needed_count = self.read_uleb()
+      while needed_count:
+        libname = self.read_string()
+        needed.append(libname)
+        needed_count -= 1
+    elif dylink_section.name == 'dylink.0':
+      section_end = dylink_section.offset + dylink_section.size
+      while self.tell() < section_end:
+        subsection_type = self.read_uleb()
+        subsection_size = self.read_uleb()
+        end = self.tell() + subsection_size
+        if subsection_type == DylinkType.MEM_INFO:
+          mem_size = self.read_uleb()
+          mem_align = self.read_uleb()
+          table_size = self.read_uleb()
+          table_align = self.read_uleb()
+        elif subsection_type == DylinkType.NEEDED:
+          needed_count = self.read_uleb()
+          while needed_count:
+            libname = self.read_string()
+            needed.append(libname)
+            needed_count -= 1
+        elif subsection_type == DylinkType.EXPORT_INFO:
+          count = self.read_uleb()
+          while count:
+            sym = self.read_string()
+            flags = self.read_uleb()
+            export_info[sym] = flags
+            count -= 1
+        elif subsection_type == DylinkType.IMPORT_INFO:
+          count = self.read_uleb()
+          while count:
+            module = self.read_string()
+            field = self.read_string()
+            flags = self.read_uleb()
+            import_info.setdefault(module, {})
+            import_info[module][field] = flags
+            count -= 1
+        else:
+          print(f'unknown subsection: {subsection_type}')
+          # ignore unknown subsections
+          self.skip(subsection_size)
+        assert self.tell() == end
+    else:
+      utils.exit_with_error('error parsing shared library')
+
+    return Dylink(mem_size, mem_align, table_size, table_align, needed, export_info, import_info)
+
+  @memoize
+  def get_exports(self):
+    export_section = self.get_section(SecType.EXPORT)
+    if not export_section:
+      return []
+
+    self.seek(export_section.offset)
+    num_exports = self.read_uleb()
+    exports = []
+    for _ in range(num_exports):
+      name = self.read_string()
+      kind = ExternType(self.read_byte())
+      index = self.read_uleb()
+      exports.append(Export(name, kind, index))
+
+    return exports
+
+  @memoize
+  def get_imports(self):
+    import_section = self.get_section(SecType.IMPORT)
+    if not import_section:
+      return []
+
+    self.seek(import_section.offset)
+    num_imports = self.read_uleb()
+    imports = []
+    for _ in range(num_imports):
+      mod = self.read_string()
+      field = self.read_string()
+      kind = ExternType(self.read_byte())
+      type_ = None
+      if kind == ExternType.FUNC:
+        type_ = self.read_uleb()
+      elif kind == ExternType.GLOBAL:
+        type_ = self.read_sleb()
+        self.read_byte()  # mutable
+      elif kind == ExternType.MEMORY:
+        self.read_limits()  # limits
+      elif kind == ExternType.TABLE:
+        type_ = self.read_sleb()
+        self.read_limits()  # limits
+      elif kind == ExternType.TAG:
+        self.read_byte()  # attribute
+        type_ = self.read_uleb()
+      else:
+        raise AssertionError()
+      imports.append(Import(kind, mod, field, type_))
+
+    return imports
+
+  @memoize
+  def get_globals(self):
+    global_section = self.get_section(SecType.GLOBAL)
+    if not global_section:
+      return []
+    globls = []
+    self.seek(global_section.offset)
+    num_globals = self.read_uleb()
+    for _ in range(num_globals):
+      global_type = self.read_type()
+      mutable = self.read_byte()
+      init = self.read_init()
+      globls.append(Global(global_type, mutable, init))
+    return globls
+
+  @memoize
+  def get_start(self):
+    start_section = self.get_section(SecType.START)
+    if not start_section:
+      return None
+    self.seek(start_section.offset)
+    return self.read_uleb()
+
+  @memoize
+  def get_functions(self):
+    code_section = self.get_section(SecType.CODE)
+    if not code_section:
+      return []
+    functions = []
+    self.seek(code_section.offset)
+    num_functions = self.read_uleb()
+    for _ in range(num_functions):
+      body_size = self.read_uleb()
+      start = self.tell()
+      functions.append(FunctionBody(start, body_size))
+      self.seek(start + body_size)
+    return functions
+
+  def get_section(self, section_code):
+    return next((s for s in self.sections() if s.type == section_code), None)
+
+  @memoize
+  def get_custom_section(self, name):
+    for section in self.sections():
+      if section.type == SecType.CUSTOM and section.name == name:
+        return section
+    return None
+
+  @memoize
+  def get_segments(self):
+    segments = []
+    data_section = self.get_section(SecType.DATA)
+    self.seek(data_section.offset)
+    num_segments = self.read_uleb()
+    for _ in range(num_segments):
+      flags = self.read_uleb()
+      if (flags & SEG_PASSIVE):
+        init = None
+      else:
+        init = self.read_init()
+      size = self.read_uleb()
+      offset = self.tell()
+      segments.append(DataSegment(flags, init, offset, size))
+      self.seek(offset + size)
+    return segments
+
+  @memoize
+  def get_tables(self):
+    table_section = self.get_section(SecType.TABLE)
+    if not table_section:
+      return []
+
+    self.seek(table_section.offset)
+    num_tables = self.read_uleb()
+    tables = []
+    for _ in range(num_tables):
+      elem_type = self.read_type()
+      limits = self.read_limits()
+      tables.append(Table(elem_type, limits))
+
+    return tables
+
+  @memoize
+  def get_function_types(self):
+    function_section = self.get_section(SecType.FUNCTION)
+    if not function_section:
+      return []
+
+    self.seek(function_section.offset)
+    num_types = self.read_uleb()
+    func_types = []
+    for _ in range(num_types):
+      func_types.append(self.read_uleb())
+    return func_types
+
+  def has_name_section(self):
+    return self.get_custom_section('name') is not None
+
+  @once
+  def _calc_indexes(self):
+    self.imports_by_kind = {}
+    for i in self.get_imports():
+      self.imports_by_kind.setdefault(i.kind, [])
+      self.imports_by_kind[i.kind].append(i)
+
+  def num_imported_funcs(self):
+    self._calc_indexes()
+    return len(self.imports_by_kind.get(ExternType.FUNC, []))
+
+  def num_imported_globals(self):
+    self._calc_indexes()
+    return len(self.imports_by_kind.get(ExternType.GLOBAL, []))
+
+  def get_function(self, idx):
+    self._calc_indexes()
+    assert idx >= self.num_imported_funcs()
+    return self.get_functions()[idx - self.num_imported_funcs()]
+
+  def get_global(self, idx):
+    self._calc_indexes()
+    assert idx >= self.num_imported_globals()
+    return self.get_globals()[idx - self.num_imported_globals()]
+
+  def get_function_type(self, idx):
+    self._calc_indexes()
+    if idx < self.num_imported_funcs():
+      imp = self.imports_by_kind[ExternType.FUNC][idx]
+      func_type = imp.type
+    else:
+      func_type = self.get_function_types()[idx - self.num_imported_funcs()]
+    return self.get_types()[func_type]
 
 
 def parse_dylink_section(wasm_file):
-  module = Module(wasm_file)
-
-  dylink_section = next(module.sections())
-  assert dylink_section.type == SecType.CUSTOM
-  module.seek(dylink_section.offset)
-  # section name
-  section_name = module.readString()
-  assert section_name == 'dylink'
-  mem_size = module.readULEB()
-  mem_align = module.readULEB()
-  table_size = module.readULEB()
-  table_align = module.readULEB()
-
-  needed = []
-  needed_count = module.readULEB()
-  while needed_count:
-    libname = module.readString()
-    needed.append(libname)
-    needed_count -= 1
-
-  return Dylink(mem_size, mem_align, table_size, table_align, needed)
+  with Module(wasm_file) as module:
+    return module.parse_dylink_section()
 
 
 def get_exports(wasm_file):
-  module = Module(wasm_file)
-  export_section = next((s for s in module.sections() if s.type == SecType.EXPORT), None)
-
-  module.seek(export_section.offset)
-  num_exports = module.readULEB()
-  exports = []
-  for i in range(num_exports):
-    name = module.readString()
-    kind = ExternType(module.readByte())
-    index = module.readULEB()
-    exports.append(Export(name, kind, index))
-
-  return exports
+  with Module(wasm_file) as module:
+    return module.get_exports()
 
 
 def get_imports(wasm_file):
-  module = Module(wasm_file)
-  import_section = next((s for s in module.sections() if s.type == SecType.IMPORT), None)
-  if not import_section:
-    return []
-
-  module.seek(import_section.offset)
-  num_imports = module.readULEB()
-  imports = []
-  for i in range(num_imports):
-    mod = module.readString()
-    field = module.readString()
-    kind = ExternType(module.readByte())
-    imports.append(Import(kind, mod, field))
-    if kind == ExternType.FUNC:
-      module.readULEB()  # sig
-    elif kind == ExternType.GLOBAL:
-      module.readSLEB()  # global type
-      module.readByte()  # mutable
-    elif kind == ExternType.MEMORY:
-      module.readLimits()  # limits
-    elif kind == ExternType.TABLE:
-      module.readSLEB()  # table type
-      module.readLimits()  # limits
-    else:
-      assert False
-
-  return imports
+  with Module(wasm_file) as module:
+    return module.get_imports()

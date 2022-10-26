@@ -48,19 +48,19 @@ those modes Emscripten focuses on faster iteration times. (Note that it is ok
 to link with those flags even if the source files were compiled with a different
 optimization level.)
 
-To also skip non-optimization work at link time, link with ``-s WASM_BIGINT``.
+To also skip non-optimization work at link time, link with ``-sWASM_BIGINT``.
 Enabling BigInt support removes the need for Emscripten to "legalize" the wasm
 to handle ``i64`` values on the JS/Wasm boundary (as with BigInts ``i64`` values
 are legal, and require no extra processing).
 
 Some link flags add additional work at the link stage that can slow things down.
-For example ``-g`` enables DWARF support, flags like ``-s SAFE_HEAP`` will require
-JS post-processing, and flags like ``-s ASYNCIFY`` will require wasm
+For example ``-g`` enables DWARF support, flags like ``-sSAFE_HEAP`` will require
+JS post-processing, and flags like ``-sASYNCIFY`` will require wasm
 post-processing. To ensure your flags allow the fastest possible link, in which
 the wasm is not modified after ``wasm-ld``, build with
-``-s ERROR_ON_WASM_CHANGES_AFTER_LINK``. With that option you will get an error
+``-sERROR_ON_WASM_CHANGES_AFTER_LINK``. With that option you will get an error
 during link if Emscripten must perform changes to the Wasm. For example, if you
-didn't pass ``-s WASM_BIGINT`` then it will tell you that legalization forces
+didn't pass ``-sWASM_BIGINT`` then it will tell you that legalization forces
 it to change the Wasm. You will also get an error if you build with ``-O2`` or
 above, as the Binaryen optimizer would normally be run.
 
@@ -73,7 +73,7 @@ There are several flags you can :ref:`pass to the compiler <emcc-s-option-value>
 WebAssembly
 ===========
 
-Emscripten will emit WebAssembly by default. You can switch that off with ``-s WASM=0`` (in which case emscripten emit JavaScript), which is necessary if you want the output to run in places where wasm support is not present yet, but the downside is larger and slower code.
+Emscripten will emit WebAssembly by default. You can switch that off with ``-sWASM=0`` (in which case emscripten emit JavaScript), which is necessary if you want the output to run in places where wasm support is not present yet, but the downside is larger and slower code.
 
 .. _optimizing-code-size:
 
@@ -102,8 +102,8 @@ In addition to the above, the following tips can help to reduce code size:
 
 The following compiler settings can help (see ``src/settings.js`` for more details):
 
-- Disable inlining when possible, using ``-s INLINING_LIMIT=1``. Compiling with -Os or -Oz generally avoids inlining too. (Inlining can make code faster, though, so use this carefully.)
-- You can use the ``-s FILESYSTEM=0`` option to disable bundling of filesystem support code (the compiler should optimize it out if not used, but may not always succeed). This can be useful if you are building a pure computational library, for example.
+- Disable inlining when possible, using ``-sINLINING_LIMIT``. Compiling with -Os or -Oz generally avoids inlining too. (Inlining can make code faster, though, so use this carefully.)
+- You can use the ``-sFILESYSTEM=0`` option to disable bundling of filesystem support code (the compiler should optimize it out if not used, but may not always succeed). This can be useful if you are building a pure computational library, for example.
 - The ``ENVIRONMENT`` flag lets you specify that the output will only run on the web, or only run in node.js, etc. This prevents the compiler from emitting code to support all possible runtime environments, saving ~2KB.
 
 LTO
@@ -119,6 +119,59 @@ linker can handle a mix wasm object files and LTO object files.  Passing
 Thus, to allow maximal LTO opportunities with the LLVM wasm backend, build all
 source files with ``-flto`` and also link with ``flto``.
 
+EVAL_CTORS
+==========
+
+Building with ``-sEVAL_CTORS`` will evaluate as much code as possible at
+compile time. That includes both the "global ctor" functions (functions LLVM
+emits that run before ``main()``) as well as ``main()`` itself. As much as can
+be evaluated will be, and the resulting state is then "snapshotted" into the
+wasm. Then when the program is run it will begin from that state, and not need
+to execute that code, which can save time.
+
+This optimization can either reduce or increase code size. If a small amount
+of code generates many changes in memory, for example, then overall size may
+increase. It is best to build with this flag and then measure code and startup
+speed and see if the tradeoff is worthwhile in your program.
+
+You can make an effort to write EVAL_CTORS-friendly code, by deferring things
+that cannot be evalled as much as possible. For example, calls to imports stop
+this optimization, and so if you have a game engine that creates a GL context
+and then does some pure computation to set up unrelated data structures in
+memory, then you could reverse that order. Then the pure computation could run
+first, and be evalled away, and the GL context creation call to an import would
+not prevent that. Other things you can do are to avoid using ``argc/argv``, to
+avoid using ``getenv()``, and so forth.
+
+Logging is shown when using this option so that you can see whether things can
+be improved. Here is an example of output from ``emcc -sEVAL_CTORS``:
+
+::
+
+  trying to eval __wasm_call_ctors
+    ...partial evalling successful, but stopping since could not eval: call import: wasi_snapshot_preview1.environ_sizes_get
+         recommendation: consider --ignore-external-input
+    ...stopping
+
+The first line indicates an attempt to eval LLVM's function that runs global
+ctors. It evalled some of the function but then it stopped on the WASI import
+``environ_sizes_get``, which means it is trying to read from the environment.
+As the output says, you can tell ``EVAL_CTORS`` to ignore external input, which
+will ignore such things. You can enable that with mode ``2``, that is, build
+with ``emcc -sEVAL_CTORS=2``:
+
+::
+
+  trying to eval __wasm_call_ctors
+    ...success on __wasm_call_ctors.
+  trying to eval main
+    ...stopping (in block) since could not eval: call import: wasi_snapshot_preview1.fd_write
+    ...stopping
+
+Now it has succeeded to eval ``__wasm_call_ctors`` completely. It then moved on
+to ``main``, where it stopped because of a call to WASI's ``fd_write``, that is,
+a call to print something.
+
 Very large codebases
 ====================
 
@@ -128,6 +181,11 @@ Running by itself
 -----------------
 
 If you hit memory limits in browsers, it can help to run your project by itself, as opposed to inside a web page containing other content. If you open a new web page (as a new tab, or a new window) that contains just your project, then you have the best chance at avoiding memory fragmentation issues.
+
+Module Splitting
+----------------
+
+If your module is large enough that the time to download and instantiate it is noticeably affecting your application's startup performance, it may be worth splitting the module and deferring the loading of code that is not necessary to bring up the application. See :ref:`Module-Splitting` for a guide on how to do this. *Note that module splitting is an experimental feature and subject to change.*
 
 
 Other optimization issues
@@ -140,7 +198,7 @@ C++ exceptions
 
 Catching C++ exceptions (specifically, emitting catch blocks) is turned off by default in ``-O1`` (and above). Due to how WebAssembly currently implement exceptions, this makes the code much smaller and faster (eventually, wasm should gain native support for exceptions, and not have this issue).
 
-To re-enable exceptions in optimized code, run *emcc* with ``-s DISABLE_EXCEPTION_CATCHING=0`` (see `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_).
+To re-enable exceptions in optimized code, run *emcc* with ``-sDISABLE_EXCEPTION_CATCHING=0`` (see `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_).
 
 .. note:: When exception catching is disabled, a thrown exception terminates the application. In other words, an exception is still thrown, but it isn't caught.
 
@@ -154,7 +212,7 @@ C++ run-time type info support (dynamic casts, etc.) adds overhead that is somet
 Memory Growth
 -------------
 
-Building with ``-s ALLOW_MEMORY_GROWTH=1`` allows the total amount of memory used to change depending on the demands of the application. This is useful for apps that don't know ahead of time how much they will need.
+Building with ``-sALLOW_MEMORY_GROWTH`` allows the total amount of memory used to change depending on the demands of the application. This is useful for apps that don't know ahead of time how much they will need.
 
 Viewing code optimization passes
 --------------------------------

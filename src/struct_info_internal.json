@@ -6,51 +6,43 @@
         "file": "pthread_impl.h",
         "structs": {
             "pthread": [
-              "threadStatus",
-              "threadExitCode",
               "profilerBlock",
-              "self",
-              "tsd",
-              "detached",
               "stack",
-              "stack_size",
-              "attr",
-              "robust_list",
-              "tid",
-              "canceldisable",
-              "cancelasync",
-              "locale"
+              "stack_size"
+            ],
+            "pthread_attr_t#": [
+              "_a_transferredcanvases"
             ],
             "thread_profiler_block": [
                 "threadStatus",
-                "currentStatusStartTime",
                 "timeSpentInStatus",
                 "name"
             ]
         },
         "defines": [
-          "__ATTRP_C11_THREAD",
-          "EM_THREAD_NAME_MAX"
+          "SIGCANCEL"
         ]
     },
     {
-        "file": "libc.h",
+        "file": "dynlink.h",
         "structs": {
-            "libc": [
-              "global_locale"
+            "dso": [
+              "flags",
+              "mem_allocated",
+              "mem_addr",
+              "mem_size",
+              "table_addr",
+              "table_size",
+              "name"
             ]
         }
     },
     {
-        "file": "cxa_exception.h",
-        "structs": {
-            "__cxxabiv1::__cxa_exception": [
-              "exceptionDestructor",
-              "referenceCount",
-              "exceptionType",
-              "caught",
-              "rethrown"
-            ]
-        }
+        "file": "proxying_notification_state.h",
+        "defines": [
+            "NOTIFICATION_NONE",
+            "NOTIFICATION_RECEIVED",
+            "NOTIFICATION_PENDING"
+        ]
     }
 ]

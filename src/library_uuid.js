@@ -32,6 +32,7 @@ mergeInto(LibraryManager.library, {
   // Write a RFC4122 version 4 compliant UUID largely based on the method found in
   // http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
   // tweaked slightly in order to use the 'compact' UUID form used by libuuid.
+  uuid_generate__deps: ['$writeArrayToMemory'],
   uuid_generate: function(out) {
     // void uuid_generate(uuid_t out);
     var uuid = null;
@@ -45,8 +46,8 @@ mergeInto(LibraryManager.library, {
       } catch(e) {}
 #endif // ENVIRONMENT_MAY_BE_NODE
     } else if (ENVIRONMENT_IS_WEB &&
-               typeof(window.crypto) !== 'undefined' &&
-               typeof(window.crypto.getRandomValues) !== 'undefined') {
+               typeof window.crypto != 'undefined' &&
+               typeof window.crypto.getRandomValues != 'undefined') {
       // If crypto.getRandomValues is available try to use it.
       uuid = new Uint8Array(16);
       window.crypto.getRandomValues(uuid);
@@ -100,13 +101,11 @@ mergeInto(LibraryManager.library, {
 
       if (i < 16) {
         return -1;
-      } else {
-        writeArrayToMemory(uuid, uu);
-        return 0;
       }
-    } else {
-      return -1;
+      writeArrayToMemory(uuid, uu);
+      return 0;
     }
+    return -1;
   },
 
   // Convert a 'compact' form UUID to a string, if the upper parameter is supplied make the string upper case.
@@ -115,8 +114,8 @@ mergeInto(LibraryManager.library, {
     // void uuid_unparse(const uuid_t uu, char *out);
     var i = 0;
     var uuid = 'xxxx-xx-xx-xx-xxxxxx'.replace(/[x]/g, function(c) {
-      var r = upper ? ({{{ makeGetValue('uu', 'i', 'i8', 0, 1) }}}).toString(16).toUpperCase() :
-                      ({{{ makeGetValue('uu', 'i', 'i8', 0, 1) }}}).toString(16);
+      var r = upper ? ({{{ makeGetValue('uu', 'i', 'u8') }}}).toString(16).toUpperCase() :
+                      ({{{ makeGetValue('uu', 'i', 'u8') }}}).toString(16);
       r = (r.length === 1) ? '0' + r : r; // Zero pad single digit hex values
       i++;
       return r;

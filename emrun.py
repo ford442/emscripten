@@ -254,7 +254,7 @@ user_pref("dom.workers.maxPerDomain", 100);
 // Always allow opening popups
 user_pref("browser.popups.showPopupBlocker", false);
 user_pref("dom.disable_open_during_load", false);
-// Don't ask user if he wants to set Firefox as the default system browser
+// Don't ask user if they want to set Firefox as the default system browser
 user_pref("browser.shell.checkDefaultBrowser", false);
 user_pref("browser.shell.skipDefaultBrowserCheck", true);
 // If automated runs crash, don't resume old tabs on the next run or show safe mode dialogs or anything else extra.
@@ -294,7 +294,7 @@ user_pref('browser.newtabpage.introShown', true);
 user_pref('browser.download.panel.shown', true);
 user_pref('browser.customizemode.tip0.shown', true);
 user_pref("browser.toolbarbuttons.introduced.pocket-button", true);
-// Don't ask the user if he wants to close the browser when there are multiple tabs.
+// Don't ask the user if they want to close the browser when there are multiple tabs.
 user_pref("browser.tabs.warnOnClose", false);
 // Allow the launched script window to close itself, so that we don't need to kill the browser process in order to move on.
 user_pref("dom.allow_scripts_to_close_windows", true);
@@ -534,7 +534,7 @@ class HTTPWebServer(socketserver.ThreadingMixIn, HTTPServer):
     while self.is_running:
       now = tick()
       # Did user close browser?
-      if not emrun_options.no_browser and not is_browser_process_alive():
+      if emrun_options.run_browser and not is_browser_process_alive():
         logv("Shutting down because browser is no longer alive")
         delete_emrun_safe_firefox_profile()
         if not emrun_options.serve_after_close:
@@ -684,13 +684,12 @@ class HTTPHandler(SimpleHTTPRequestHandler):
       # Binary file dump/upload handling. Requests to
       # "stdio.html?file=filename" will write binary data to the given file.
       data = self.rfile.read(int(self.headers['Content-Length']))
-      filename = query[len('file='):]
-      dump_out_directory = 'dump_out'
+      filename = unquote_u(query[len('file='):])
+      filename = os.path.join(emrun_options.dump_out_directory, os.path.normpath(filename))
       try:
-        os.mkdir(dump_out_directory)
+        os.makedirs(os.path.dirname(filename))
       except OSError:
         pass
-      filename = os.path.join(dump_out_directory, os.path.normpath(filename))
       with open(filename, 'wb') as fh:
         fh.write(data)
       logi('Wrote ' + str(len(data)) + ' bytes to file "' + filename + '".')
@@ -1361,7 +1360,7 @@ def subprocess_env():
 def remove_tree(d):
   os.chmod(d, stat.S_IWRITE)
   try:
-    def remove_readonly_and_try_again(func, path, exc_info):
+    def remove_readonly_and_try_again(func, path, _exc_info):
       if not (os.stat(path).st_mode & stat.S_IWRITE):
         os.chmod(path, stat.S_IWRITE)
         func(path)
@@ -1451,9 +1450,7 @@ def list_processes_by_name(exe_full_path):
   return pids
 
 
-def run():
-  global browser_process, browser_exe, processname_killed_atexit, emrun_options, emrun_not_enabled_nag_printed
-  usage_str = """\
+usage_str = """\
 emrun [emrun_options] filename.html -- [html_cmdline_options]
 
    where emrun_options specifies command line options for emrun itself, whereas
@@ -1463,6 +1460,9 @@ If you are seeing "unrecognized arguments" when trying to pass
 arguments to your page, remember to add `--` between arguments
 to emrun itself and arguments to your page.
 """
+
+
+def parse_args():
   parser = argparse.ArgumentParser(usage=usage_str)
 
   parser.add_argument('--kill_start', action='store_true',
@@ -1476,11 +1476,13 @@ to emrun itself and arguments to your page.
                            '--browser=/path/to/browser, to avoid emrun being '
                            'detached from the browser process it spawns.')
 
-  parser.add_argument('--no_server', action='store_true',
+  parser.add_argument('--no_server', dest='run_server', action='store_false',
+                      default=True,
                       help='If specified, a HTTP web server is not launched '
                            'to host the page to run.')
 
-  parser.add_argument('--no_browser', action='store_true',
+  parser.add_argument('--no_browser', dest='run_browser', action='store_false',
+                      default=True,
                       help='If specified, emrun will not launch a web browser '
                            'to run the page.')
 
@@ -1571,11 +1573,20 @@ to emrun itself and arguments to your page.
   parser.add_argument('--private_browsing', action='store_true',
                       help='If specified, opens browser in private/incognito mode.')
 
+  parser.add_argument('--dump_out_directory', default='dump_out', type=str,
+                      help='If specified, overrides the directory for dump files using emrun_file_dump method.')
+
   parser.add_argument('serve', nargs='?', default='')
 
   parser.add_argument('cmdlineparams', nargs='*')
 
-  options = emrun_options = parser.parse_args()
+  return parser.parse_args()
+
+
+def run():
+  global browser_process, browser_exe, processname_killed_atexit, emrun_options, emrun_not_enabled_nag_printed
+
+  options = emrun_options = parse_args()
 
   if options.android:
     global ADB
@@ -1603,9 +1614,9 @@ to emrun itself and arguments to your page.
 
   if not options.serve and (options.system_info or options.browser_info):
     # Don't run if only --system_info or --browser_info was passed.
-    options.no_server = options.no_browser = True
+    options.run_server = options.run_browser = False
 
-  if not options.serve and not (options.no_server and options.no_browser):
+  if not options.serve and (options.run_server or options.run_browser):
     logi(usage_str)
     logi('')
     logi('Type emrun --help for a detailed list of available options.')
@@ -1637,14 +1648,14 @@ to emrun itself and arguments to your page.
     url = 'http://' + hostname + ':' + str(options.port) + '/' + url
 
   os.chdir(serve_dir)
-  if not options.no_server:
-    if options.no_browser:
-      logi('Web server root directory: ' + os.path.abspath('.'))
-    else:
+  if options.run_server:
+    if options.run_browser:
       logv('Web server root directory: ' + os.path.abspath('.'))
+    else:
+      logi('Web server root directory: ' + os.path.abspath('.'))
 
   if options.android:
-    if not options.no_browser or options.browser_info:
+    if options.run_browser or options.browser_info:
       if not options.browser:
         loge("Running on Android requires that you explicitly specify the browser to run with --browser <id>. Run emrun --android --list_browsers to obtain a list of installed browsers you can use.")
         return 1
@@ -1689,7 +1700,7 @@ to emrun itself and arguments to your page.
     if options.browser:
       options.browser = unwrap(options.browser)
 
-    if not options.no_browser or options.browser_info:
+    if options.run_browser or options.browser_info:
       browser = find_browser(str(options.browser))
       if not browser:
         loge('Unable to find browser "' + str(options.browser) + '"! Check the correctness of the passed --browser=xxx parameter!')
@@ -1711,7 +1722,7 @@ to emrun itself and arguments to your page.
         browser_args += ['--enable-nacl', '--enable-pnacl', '--disable-restore-session-state', '--enable-webgl', '--no-default-browser-check', '--no-first-run', '--allow-file-access-from-files']
         if options.private_browsing:
           browser_args += ['--incognito']
-    #    if options.no_server:
+    #    if not options.run_server:
     #      browser_args += ['--disable-web-security']
       elif 'firefox' in browser_exe.lower():
         processname_killed_atexit = 'firefox'
@@ -1750,7 +1761,7 @@ to emrun itself and arguments to your page.
   # Create temporary Firefox profile to run the page with. This is important to
   # run after kill_browser_process()/kill_start op above, since that cleans up
   # the temporary profile if one exists.
-  if processname_killed_atexit == 'firefox' and options.safe_firefox_profile and not options.no_browser and not options.android:
+  if processname_killed_atexit == 'firefox' and options.safe_firefox_profile and options.run_browser and not options.android:
     profile_dir = create_emrun_safe_firefox_profile()
 
     browser += ['-no-remote', '--profile', profile_dir.replace('\\', '/')]
@@ -1782,21 +1793,22 @@ to emrun itself and arguments to your page.
     else:
       browser_stderr_handle = open(options.log_stderr, 'a')
 
-  if not options.no_server:
+  if options.run_server:
     logv('Starting web server: http://%s:%i/' % (options.hostname, options.port))
     httpd = HTTPWebServer((options.hostname, options.port), HTTPHandler)
 
-  if not options.no_browser:
+  if options.run_browser:
     logv("Starting browser: %s" % ' '.join(browser))
     # if browser[0] == 'cmd':
     #   Workaround an issue where passing 'cmd /C start' is not able to detect
     #   when the user closes the page.
     #   serve_forever = True
-    global previous_browser_processes
-    logv(browser_exe)
-    previous_browser_processes = list_processes_by_name(browser_exe)
-    for p in previous_browser_processes:
-      logv('Before spawning web browser, found a running ' + os.path.basename(browser_exe) + ' browser process id: ' + str(p['pid']))
+    if browser_exe:
+      global previous_browser_processes
+      logv(browser_exe)
+      previous_browser_processes = list_processes_by_name(browser_exe)
+      for p in previous_browser_processes:
+        logv('Before spawning web browser, found a running ' + os.path.basename(browser_exe) + ' browser process id: ' + str(p['pid']))
     browser_process = subprocess.Popen(browser, env=subprocess_env())
     logv('Launched browser process with pid=' + str(browser_process.pid))
     if options.kill_exit:
@@ -1805,7 +1817,7 @@ to emrun itself and arguments to your page.
     # represent a browser and no point killing it.
     if options.android:
       browser_process = None
-  elif not options.no_server:
+  elif options.run_server:
     logi('Now listening at http://%s:%i/' % (options.hostname, options.port))
 
   if browser_process:
@@ -1816,7 +1828,7 @@ to emrun itself and arguments to your page.
       if not options.browser:
         logv('Try passing the --browser=/path/to/browser option to avoid this from occurring. See https://github.com/emscripten-core/emscripten/issues/3234 for more discussion.')
 
-  if not options.no_server:
+  if options.run_server:
     try:
       httpd.serve_forever()
     except KeyboardInterrupt:
@@ -1825,7 +1837,7 @@ to emrun itself and arguments to your page.
 
     logv('Closed web server.')
 
-  if not options.no_browser:
+  if options.run_browser:
     if options.kill_exit:
       kill_browser_process()
     else:

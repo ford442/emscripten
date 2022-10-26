@@ -8,7 +8,7 @@ mergeInto(LibraryManager.library, {
   $PIPEFS__postset: function() {
     addAtInit('PIPEFS.root = FS.mount(PIPEFS, {}, null);');
   },
-  $PIPEFS__deps: ['$FS', '$ERRNO_CODES'],
+  $PIPEFS__deps: ['$FS'],
   $PIPEFS: {
     BUCKET_BUFFER_SIZE: 1024 * 8, // 8KiB Buffer
     mount: function (mount) {
@@ -18,7 +18,10 @@ mergeInto(LibraryManager.library, {
     },
     createPipe: function () {
       var pipe = {
-        buckets: []
+        buckets: [],
+        // refcnt 2 because pipe has a read end and a write end. We need to be
+        // able to read from the read end after write end is closed.
+        refcnt : 2,
       };
 
       pipe.buckets.push({
@@ -64,13 +67,12 @@ mergeInto(LibraryManager.library, {
 
         if ((stream.flags & {{{ cDefine('O_ACCMODE') }}}) === {{{ cDefine('O_WRONLY') }}}) {
           return ({{{ cDefine('POLLWRNORM') }}} | {{{ cDefine('POLLOUT') }}});
-        } else {
-          if (pipe.buckets.length > 0) {
-            for (var i = 0; i < pipe.buckets.length; i++) {
-              var bucket = pipe.buckets[i];
-              if (bucket.offset - bucket.roffset > 0) {
-                return ({{{ cDefine('POLLRDNORM') }}} | {{{ cDefine('POLLIN') }}});
-              }
+        }
+        if (pipe.buckets.length > 0) {
+          for (var i = 0; i < pipe.buckets.length; i++) {
+            var bucket = pipe.buckets[i];
+            if (bucket.offset - bucket.roffset > 0) {
+              return ({{{ cDefine('POLLRDNORM') }}} | {{{ cDefine('POLLIN') }}});
             }
           }
         }
@@ -78,10 +80,10 @@ mergeInto(LibraryManager.library, {
         return 0;
       },
       ioctl: function (stream, request, varargs) {
-        return ERRNO_CODES.EINVAL;
+        return {{{ cDefine('EINVAL') }}};
       },
       fsync: function (stream) {
-        return ERRNO_CODES.EINVAL;
+        return {{{ cDefine('EINVAL') }}};
       },
       read: function (stream, buffer, offset, length, position /* ignored */) {
         var pipe = stream.node.pipe;
@@ -104,7 +106,7 @@ mergeInto(LibraryManager.library, {
         }
         if (currentLength == 0) {
           // Behave as if the read end is always non-blocking
-          throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
+          throw new FS.ErrnoError({{{ cDefine('EAGAIN') }}});
         }
         var toRead = Math.min(currentLength, length);
 
@@ -215,7 +217,10 @@ mergeInto(LibraryManager.library, {
       },
       close: function (stream) {
         var pipe = stream.node.pipe;
-        pipe.buckets = null;
+        pipe.refcnt--;
+        if (pipe.refcnt === 0) {
+          pipe.buckets = null;
+        }
       }
     },
     nextname: function () {

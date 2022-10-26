@@ -1,4 +1,4 @@
-//===------------------------- cxa_exception.cpp --------------------------===//
+//===----------------------------------------------------------------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -17,10 +17,10 @@
 #include "cxa_exception.h"
 #include "cxa_handlers.h"
 #include "fallback_malloc.h"
-#include "include/atomic_support.h"
+#include "include/atomic_support.h" // from libc++
 
 #if __has_feature(address_sanitizer)
-extern "C" void __asan_handle_no_return(void);
+#include <sanitizer/asan_interface.h>
 #endif
 
 // +---------------------------+-----------------------------+---------------+
@@ -253,6 +253,13 @@ handler, _Unwind_RaiseException may return. In that case, __cxa_throw
 will call terminate, assuming that there was no handler for the
 exception.
 */
+
+#if defined(__USING_WASM_EXCEPTIONS__) && !defined(NDEBUG)
+extern "C" {
+void __throw_exception_with_stack_trace(_Unwind_Exception*);
+} // extern "C"
+#endif
+
 void
 #ifdef __USING_WASM_EXCEPTIONS__
 // In wasm, destructors return their argument
@@ -280,6 +287,14 @@ __cxa_throw(void *thrown_object, std::type_info *tinfo, void (*dest)(void *)) {
 
 #ifdef __USING_SJLJ_EXCEPTIONS__
     _Unwind_SjLj_RaiseException(&exception_header->unwindHeader);
+#elif __USING_WASM_EXCEPTIONS__
+#ifdef NDEBUG
+    _Unwind_RaiseException(&exception_header->unwindHeader);
+#else
+    // In debug mode, call a JS library function to use WebAssembly.Exception JS
+    // API, which enables us to include stack traces
+    __throw_exception_with_stack_trace(&exception_header->unwindHeader);
+#endif
 #else
     _Unwind_RaiseException(&exception_header->unwindHeader);
 #endif
@@ -346,8 +361,10 @@ unwinding with _Unwind_Resume.
 According to ARM EHABI 8.4.1, __cxa_end_cleanup() should not clobber any
 register, thus we have to write this function in assembly so that we can save
 {r1, r2, r3}.  We don't have to save r0 because it is the return value and the
-first argument to _Unwind_Resume().  In addition, we are saving r4 in order to
-align the stack to 16 bytes, even though it is a callee-save register.
+first argument to _Unwind_Resume().  In addition, we are saving lr in order to
+align the stack to 16 bytes and lr will be used to identify the caller and its
+frame information. _Unwind_Resume never return and we need to keep the original
+lr so just branch to it.
 */
 __attribute__((used)) static _Unwind_Exception *
 __cxa_end_cleanup_impl()
@@ -377,19 +394,25 @@ __cxa_end_cleanup_impl()
     return &exception_header->unwindHeader;
 }
 
-asm (
-    "	.pushsection	.text.__cxa_end_cleanup,\"ax\",%progbits\n"
+asm("	.pushsection	.text.__cxa_end_cleanup,\"ax\",%progbits\n"
     "	.globl	__cxa_end_cleanup\n"
     "	.type	__cxa_end_cleanup,%function\n"
     "__cxa_end_cleanup:\n"
-    "	push	{r1, r2, r3, r4}\n"
+#if defined(__ARM_FEATURE_BTI_DEFAULT)
+    "	bti\n"
+#endif
+    "	push	{r1, r2, r3, lr}\n"
     "	bl	__cxa_end_cleanup_impl\n"
     "	pop	{r1, r2, r3, r4}\n"
-    "	bl	_Unwind_Resume\n"
-    "	bl	abort\n"
-    "	.popsection"
-);
-#endif  // defined(_LIBCXXABI_ARM_EHABI)
+    "	mov	lr, r4\n"
+#if defined(LIBCXXABI_BAREMETAL)
+    "	ldr	r4,	=_Unwind_Resume\n"
+    "	bx	r4\n"
+#else
+    "   b _Unwind_Resume\n"
+#endif
+    "	.popsection");
+#endif // defined(_LIBCXXABI_ARM_EHABI)
 
 /*
 This routine can catch foreign or native exceptions.  If native, the exception

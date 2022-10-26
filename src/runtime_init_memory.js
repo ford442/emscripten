@@ -34,16 +34,16 @@ if (ENVIRONMENT_IS_PTHREAD) {
 #else
       'maximum': INITIAL_MEMORY / {{{ WASM_PAGE_SIZE }}}
 #endif // ALLOW_MEMORY_GROWTH
-#if USE_PTHREADS
+#if SHARED_MEMORY
       ,
       'shared': true
 #endif
     });
-#if USE_PTHREADS
+#if SHARED_MEMORY
     if (!(wasmMemory.buffer instanceof SharedArrayBuffer)) {
       err('requested a shared WebAssembly.Memory but the returned buffer is not a SharedArrayBuffer, indicating that while the browser has SharedArrayBuffer it does not have WebAssembly threads support - you may need to set a flag');
       if (ENVIRONMENT_IS_NODE) {
-        console.log('(on node you may need: --experimental-wasm-threads --experimental-wasm-bulk-memory and also use a recent version)');
+        err('(on node you may need: --experimental-wasm-threads --experimental-wasm-bulk-memory and/or recent version)');
       }
       throw Error('bad memory');
     }

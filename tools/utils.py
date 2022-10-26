@@ -5,7 +5,9 @@
 
 import contextlib
 import os
+import shutil
 import sys
+from pathlib import Path
 
 from . import diagnostics
 
@@ -20,7 +22,7 @@ def exit_with_error(msg, *args):
 
 
 def path_from_root(*pathelems):
-  return os.path.join(__rootpath__, *pathelems)
+  return str(Path(__rootpath__, *pathelems))
 
 
 def safe_ensure_dirs(dirname):
@@ -72,7 +74,7 @@ def which(program):
 
 def read_file(file_path):
   """Read from a file opened in text mode"""
-  with open(file_path) as fh:
+  with open(file_path, encoding='utf-8') as fh:
     return fh.read()
 
 
@@ -84,5 +86,40 @@ def read_binary(file_path):
 
 def write_file(file_path, text):
   """Write to a file opened in text mode"""
-  with open(file_path, 'w') as fh:
+  with open(file_path, 'w', encoding='utf-8') as fh:
     fh.write(text)
+
+
+def write_binary(file_path, contents):
+  """Write to a file opened in binary mode"""
+  with open(file_path, 'wb') as fh:
+    fh.write(contents)
+
+
+def delete_file(filename):
+  """Delete a file (if it exists)."""
+  if not os.path.exists(filename):
+    return
+  os.remove(filename)
+
+
+def delete_dir(dirname):
+  """Delete a directory (if it exists)."""
+  if not os.path.exists(dirname):
+    return
+  shutil.rmtree(dirname)
+
+
+def delete_contents(dirname, exclude=None):
+  """Delete the contents of a directory without removing
+  the directory itself."""
+  if not os.path.exists(dirname):
+    return
+  for entry in os.listdir(dirname):
+    if exclude and entry in exclude:
+      continue
+    entry = os.path.join(dirname, entry)
+    if os.path.isdir(entry):
+      delete_dir(entry)
+    else:
+      delete_file(entry)

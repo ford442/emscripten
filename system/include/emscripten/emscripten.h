@@ -25,6 +25,7 @@
 #include "em_types.h"
 #include "em_js.h"
 #include "wget.h"
+#include "version.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -70,8 +71,8 @@ void emscripten_set_main_loop_expected_blockers(int num);
 
 void emscripten_async_call(em_arg_callback_func func, void *arg, int millis);
 
-void emscripten_exit_with_live_runtime(void);
-void emscripten_force_exit(int status);
+void emscripten_exit_with_live_runtime(void) __attribute__((__noreturn__));
+void emscripten_force_exit(int status) __attribute__((__noreturn__));
 
 double emscripten_get_device_pixel_ratio(void);
 
@@ -135,7 +136,7 @@ int emscripten_get_worker_queue_size(worker_handle worker);
 
 // misc.
 
-int emscripten_get_compiler_setting(const char *name);
+long emscripten_get_compiler_setting(const char *name);
 int emscripten_has_asyncify(void);
 
 void emscripten_debugger(void);
@@ -173,12 +174,14 @@ void emscripten_scan_stack(em_scan_func func);
 typedef void (*em_dlopen_callback)(void* handle, void* user_data);
 void emscripten_dlopen(const char *filename, int flags, void* user_data, em_dlopen_callback onsuccess, em_arg_callback_func onerror);
 
+void emscripten_throw_number(double number);
+void emscripten_throw_string(const char *utf8String);
+
 /* ===================================== */
 /* Internal APIs. Be careful with these. */
 /* ===================================== */
 
 void emscripten_sleep(unsigned int ms);
-void emscripten_sleep_with_yield(unsigned int ms);
 
 #ifdef __cplusplus
 }

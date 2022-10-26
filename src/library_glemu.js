@@ -79,6 +79,11 @@ var LibraryGLEmulation = {
     lightPosition: [],
     // TODO attenuation modes of lights
 
+    // GL_ALPHA_TEST support
+    alphaTestEnabled: false,
+    alphaTestFunc: 0x207, // GL_ALWAYS
+    alphaTestRef: 0.0,
+
     // GL_POINTS support.
     pointSize: 1.0,
 
@@ -157,7 +162,7 @@ var LibraryGLEmulation = {
       // Add some emulation workarounds
       err('WARNING: using emscripten GL emulation. This is a collection of limited workarounds, do not expect it to work.');
 #if GL_UNSAFE_OPTS == 1
-      err('WARNING: using emscripten GL emulation unsafe opts. If weirdness happens, try -s GL_UNSAFE_OPTS=0');
+      err('WARNING: using emscripten GL emulation unsafe opts. If weirdness happens, try -sGL_UNSAFE_OPTS=0');
 #endif
 
       // XXX some of the capabilities we don't support may lead to incorrect rendering, if we do not emulate them in shaders
@@ -175,7 +180,7 @@ var LibraryGLEmulation = {
 
 #if RELOCATABLE
 {{{
-(updateExport = function(name) {
+(updateExport = (name) => {
   var name = '_' + name;
   var exported = 'Module["' + name + '"]';
   // make sure we write to an existing export, and are not repeating ourselves
@@ -183,11 +188,11 @@ var LibraryGLEmulation = {
 }, '')
 }}}
 #else
-{{{ (updateExport = function(){ return '' }, '') }}}
+{{{ (updateExport = () => '', '') }}}
 #endif
 
       var glEnable = _glEnable;
-      _glEnable = _emscripten_glEnable = function _glEnable(cap) {
+      _glEnable = _emscripten_glEnable = (cap) => {
         // Clean up the renderer on any change to the rendering state. The optimization of
         // skipping renderer setup is aimed at the case of multiple glDraw* right after each other
         if (GLImmediate.lastRenderer) GLImmediate.lastRenderer.cleanup();
@@ -217,6 +222,12 @@ var LibraryGLEmulation = {
             GLEmulation.lightingEnabled = true;
           }
           return;
+        } else if (cap == 0xBC0 /* GL_ALPHA_TEST */) {
+          if (GLEmulation.alphaTestEnabled != true) {
+            GLImmediate.currentRenderer = null; // alpha testing is part of the FFP shader state, we must re-lookup the renderer to use.
+            GLEmulation.alphaTestEnabled = true;
+          }
+          return;
         } else if (cap == 0xDE1 /* GL_TEXTURE_2D */) {
           // XXX not according to spec, and not in desktop GL, but works in some GLES1.x apparently, so support
           // it by forwarding to glEnableClientState
@@ -233,7 +244,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glEnable') }}}
 
       var glDisable = _glDisable;
-      _glDisable = _emscripten_glDisable = function _glDisable(cap) {
+      _glDisable = _emscripten_glDisable = (cap) => {
         if (GLImmediate.lastRenderer) GLImmediate.lastRenderer.cleanup();
         if (cap == 0xB60 /* GL_FOG */) {
           if (GLEmulation.fogEnabled != false) {
@@ -257,8 +268,14 @@ var LibraryGLEmulation = {
           return;
         } else if (cap == 0xB50 /* GL_LIGHTING */) {
           if (GLEmulation.lightingEnabled != false) {
-            GLImmediate.currentRenderer = null; // Fog parameter is part of the FFP shader state, we must re-lookup the renderer to use.
+            GLImmediate.currentRenderer = null; // light parameter is part of the FFP shader state, we must re-lookup the renderer to use.
             GLEmulation.lightingEnabled = false;
+          }
+          return;
+        } else if (cap == 0xBC0 /* GL_ALPHA_TEST */) {
+          if (GLEmulation.alphaTestEnabled != false) {
+            GLImmediate.currentRenderer = null; // alpha testing is part of the FFP shader state, we must re-lookup the renderer to use.
+            GLEmulation.alphaTestEnabled = false;
           }
           return;
         } else if (cap == 0xDE1 /* GL_TEXTURE_2D */) {
@@ -276,7 +293,7 @@ var LibraryGLEmulation = {
       };
       {{{ updateExport('glDisable') }}}
 
-      _glIsEnabled = _emscripten_glIsEnabled = function _glIsEnabled(cap) {
+      _glIsEnabled = _emscripten_glIsEnabled = (cap) => {
         if (cap == 0xB60 /* GL_FOG */) {
           return GLEmulation.fogEnabled ? 1 : 0;
         } else if ((cap >= 0x3000) && (cap < 0x3006)  /* GL_CLIP_PLANE0 to GL_CLIP_PLANE5 */) {
@@ -287,6 +304,8 @@ var LibraryGLEmulation = {
           return GLEmulation.lightEnabled[lightId] ? 1 : 0;
         } else if (cap == 0xB50 /* GL_LIGHTING */) {
           return GLEmulation.lightingEnabled ? 1 : 0;
+        } else if (cap == 0xBC0 /* GL_ALPHA_TEST */) {
+          return GLEmulation.alphaTestEnabled ? 1 : 0;
         } else if (!(cap in validCapabilities)) {
           return 0;
         }
@@ -295,7 +314,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glIsEnabled') }}}
 
       var glGetBooleanv = _glGetBooleanv;
-      _glGetBooleanv = _emscripten_glGetBooleanv = function _glGetBooleanv(pname, p) {
+      _glGetBooleanv = _emscripten_glGetBooleanv = (pname, p) => {
         var attrib = GLEmulation.getAttributeFromCapability(pname);
         if (attrib !== null) {
           var result = GLImmediate.enabledClientAttributes[attrib];
@@ -307,7 +326,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glGetBooleanv') }}}
 
       var glGetIntegerv = _glGetIntegerv;
-      _glGetIntegerv = _emscripten_glGetIntegerv = function _glGetIntegerv(pname, params) {
+      _glGetIntegerv = _emscripten_glGetIntegerv = (pname, params) => {
         switch (pname) {
           case 0x84E2: pname = GLctx.MAX_TEXTURE_IMAGE_UNITS /* fake it */; break; // GL_MAX_TEXTURE_UNITS
           case 0x8B4A: { // GL_MAX_VERTEX_UNIFORM_COMPONENTS_ARB
@@ -379,13 +398,17 @@ var LibraryGLEmulation = {
             {{{ makeSetValue('params', '0', 'GLImmediate.currentMatrix + 0x1700', 'i32') }}};
             return;
           }
+          case 0x0BC1: { // GL_ALPHA_TEST_FUNC
+            {{{ makeSetValue('params', '0', 'GLEmulation.alphaTestFunc', 'i32') }}};
+            return;
+          }
         }
         glGetIntegerv(pname, params);
       };
       {{{ updateExport('glGetIntegerv') }}}
 
       var glGetString = _glGetString;
-      _glGetString = _emscripten_glGetString = function _glGetString(name_) {
+      _glGetString = _emscripten_glGetString = (name_) => {
         if (GL.stringCache[name_]) return GL.stringCache[name_];
         switch (name_) {
           case 0x1F03 /* GL_EXTENSIONS */: // Add various extensions that we can support
@@ -410,7 +433,7 @@ var LibraryGLEmulation = {
       GL.shaderOriginalSources = {};
 #endif
       var glCreateShader = _glCreateShader;
-      _glCreateShader = _emscripten_glCreateShader = function _glCreateShader(shaderType) {
+      _glCreateShader = _emscripten_glCreateShader = (shaderType) => {
         var id = glCreateShader(shaderType);
         GL.shaderInfos[id] = {
           type: shaderType,
@@ -428,10 +451,10 @@ var LibraryGLEmulation = {
       }
 
       var glShaderSource = _glShaderSource;
-      _glShaderSource = _emscripten_glShaderSource = function _glShaderSource(shader, count, string, length) {
+      _glShaderSource = _emscripten_glShaderSource = (shader, count, string, length) => {
         var source = GL.getSource(shader, count, string, length);
 #if GL_DEBUG
-        out("glShaderSource: Input: \n" + source);
+        dbg("glShaderSource: Input: \n" + source);
         GL.shaderOriginalSources[shader] = source;
 #endif
         // XXX We add attributes and uniforms to shaders. The program can ask for the # of them, and see the
@@ -535,21 +558,21 @@ var LibraryGLEmulation = {
         }
 #if GL_DEBUG
         GL.shaderSources[shader] = source;
-        out("glShaderSource: Output: \n" + source);
+        dbg("glShaderSource: Output: \n" + source);
 #endif
         GLctx.shaderSource(GL.shaders[shader], source);
       };
       {{{ updateExport('glShaderSource') }}}
 
       var glCompileShader = _glCompileShader;
-      _glCompileShader = _emscripten_glCompileShader = function _glCompileShader(shader) {
+      _glCompileShader = _emscripten_glCompileShader = (shader) => {
         GLctx.compileShader(GL.shaders[shader]);
 #if GL_DEBUG
         if (!GLctx.getShaderParameter(GL.shaders[shader], GLctx.COMPILE_STATUS)) {
-          err('Failed to compile shader: ' + GLctx.getShaderInfoLog(GL.shaders[shader]));
-          err('Info: ' + JSON.stringify(GL.shaderInfos[shader]));
-          err('Original source: ' + GL.shaderOriginalSources[shader]);
-          err('Source: ' + GL.shaderSources[shader]);
+          dbg('Failed to compile shader: ' + GLctx.getShaderInfoLog(GL.shaders[shader]));
+          dbg('Info: ' + JSON.stringify(GL.shaderInfos[shader]));
+          dbg('Original source: ' + GL.shaderOriginalSources[shader]);
+          dbg('Source: ' + GL.shaderSources[shader]);
           throw 'Shader compilation halt';
         }
 #endif
@@ -558,7 +581,7 @@ var LibraryGLEmulation = {
 
       GL.programShaders = {};
       var glAttachShader = _glAttachShader;
-      _glAttachShader = _emscripten_glAttachShader = function _glAttachShader(program, shader) {
+      _glAttachShader = _emscripten_glAttachShader = (program, shader) => {
         if (!GL.programShaders[program]) GL.programShaders[program] = [];
         GL.programShaders[program].push(shader);
         glAttachShader(program, shader);
@@ -566,7 +589,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glAttachShader') }}}
 
       var glDetachShader = _glDetachShader;
-      _glDetachShader = _emscripten_glDetachShader = function _glDetachShader(program, shader) {
+      _glDetachShader = _emscripten_glDetachShader = (program, shader) => {
         var programShader = GL.programShaders[program];
         if (!programShader) {
           err('WARNING: _glDetachShader received invalid program: ' + program);
@@ -579,14 +602,14 @@ var LibraryGLEmulation = {
       {{{ updateExport('glDetachShader') }}}
 
       var glUseProgram = _glUseProgram;
-      _glUseProgram = _emscripten_glUseProgram = function _glUseProgram(program) {
+      _glUseProgram = _emscripten_glUseProgram = (program) => {
 #if GL_DEBUG
         if (GL.debug) {
-          err('[using program with shaders]');
+          dbg('[using program with shaders]');
           if (program) {
             GL.programShaders[program].forEach(function(shader) {
-              err('  shader ' + shader + ', original source: ' + GL.shaderOriginalSources[shader]);
-              err('         Source: ' + GL.shaderSources[shader]);
+              dbg('  shader ' + shader + ', original source: ' + GL.shaderOriginalSources[shader]);
+              dbg('         Source: ' + GL.shaderSources[shader]);
             });
           }
         }
@@ -601,7 +624,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glUseProgram') }}}
 
       var glDeleteProgram = _glDeleteProgram;
-      _glDeleteProgram = _emscripten_glDeleteProgram = function _glDeleteProgram(program) {
+      _glDeleteProgram = _emscripten_glDeleteProgram = (program) => {
         glDeleteProgram(program);
         if (program == GL.currProgram) {
           GLImmediate.currentRenderer = null; // This changes the FFP emulation shader program, need to recompute that.
@@ -613,14 +636,14 @@ var LibraryGLEmulation = {
       // If attribute 0 was not bound, bind it to 0 for WebGL performance reasons. Track if 0 is free for that.
       var zeroUsedPrograms = {};
       var glBindAttribLocation = _glBindAttribLocation;
-      _glBindAttribLocation = _emscripten_glBindAttribLocation = function _glBindAttribLocation(program, index, name) {
+      _glBindAttribLocation = _emscripten_glBindAttribLocation = (program, index, name) => {
         if (index == 0) zeroUsedPrograms[program] = true;
         glBindAttribLocation(program, index, name);
       };
       {{{ updateExport('glBindAttribLocation') }}}
 
       var glLinkProgram = _glLinkProgram;
-      _glLinkProgram = _emscripten_glLinkProgram = function _glLinkProgram(program) {
+      _glLinkProgram = _emscripten_glLinkProgram = (program) => {
         if (!(program in zeroUsedPrograms)) {
           GLctx.bindAttribLocation(GL.programs[program], 0, 'a_position');
         }
@@ -629,7 +652,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glLinkProgram') }}}
 
       var glBindBuffer = _glBindBuffer;
-      _glBindBuffer = _emscripten_glBindBuffer = function _glBindBuffer(target, buffer) {
+      _glBindBuffer = _emscripten_glBindBuffer = (target, buffer) => {
         glBindBuffer(target, buffer);
         if (target == GLctx.ARRAY_BUFFER) {
           if (GLEmulation.currentVao) {
@@ -645,7 +668,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glBindBuffer') }}}
 
       var glGetFloatv = _glGetFloatv;
-      _glGetFloatv = _emscripten_glGetFloatv = function _glGetFloatv(pname, params) {
+      _glGetFloatv = _emscripten_glGetFloatv = (pname, params) => {
         if (pname == 0xBA6) { // GL_MODELVIEW_MATRIX
           HEAPF32.set(GLImmediate.matrix[0/*m*/], params >> 2);
         } else if (pname == 0xBA7) { // GL_PROJECTION_MATRIX
@@ -667,6 +690,8 @@ var LibraryGLEmulation = {
           {{{ makeSetValue('params', '4', 'GLEmulation.lightModelAmbient[1]', 'float') }}};
           {{{ makeSetValue('params', '8', 'GLEmulation.lightModelAmbient[2]', 'float') }}};
           {{{ makeSetValue('params', '12', 'GLEmulation.lightModelAmbient[3]', 'float') }}};
+        } else if (pname == 0xBC2) { // GL_ALPHA_TEST_REF
+          {{{ makeSetValue('params', '0', 'GLEmulation.alphaTestRef', 'float') }}};
         } else {
           glGetFloatv(pname, params);
         }
@@ -674,7 +699,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glGetFloatv') }}}
 
       var glHint = _glHint;
-      _glHint = _emscripten_glHint = function _glHint(target, mode) {
+      _glHint = _emscripten_glHint = (target, mode) => {
         if (target == 0x84EF) { // GL_TEXTURE_COMPRESSION_HINT
           return;
         }
@@ -683,7 +708,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glHint') }}}
 
       var glEnableVertexAttribArray = _glEnableVertexAttribArray;
-      _glEnableVertexAttribArray = _emscripten_glEnableVertexAttribArray = function _glEnableVertexAttribArray(index) {
+      _glEnableVertexAttribArray = _emscripten_glEnableVertexAttribArray = (index) => {
         glEnableVertexAttribArray(index);
         GLEmulation.enabledVertexAttribArrays[index] = 1;
         if (GLEmulation.currentVao) GLEmulation.currentVao.enabledVertexAttribArrays[index] = 1;
@@ -691,7 +716,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glEnableVertexAttribArray') }}}
 
       var glDisableVertexAttribArray = _glDisableVertexAttribArray;
-      _glDisableVertexAttribArray = _emscripten_glDisableVertexAttribArray = function _glDisableVertexAttribArray(index) {
+      _glDisableVertexAttribArray = _emscripten_glDisableVertexAttribArray = (index) => {
         glDisableVertexAttribArray(index);
         delete GLEmulation.enabledVertexAttribArrays[index];
         if (GLEmulation.currentVao) delete GLEmulation.currentVao.enabledVertexAttribArrays[index];
@@ -699,7 +724,7 @@ var LibraryGLEmulation = {
       {{{ updateExport('glDisableVertexAttribArray') }}}
 
       var glVertexAttribPointer = _glVertexAttribPointer;
-      _glVertexAttribPointer = _emscripten_glVertexAttribPointer = function _glVertexAttribPointer(index, size, type, normalized, stride, pointer) {
+      _glVertexAttribPointer = _emscripten_glVertexAttribPointer = (index, size, type, normalized, stride, pointer) => {
         glVertexAttribPointer(index, size, type, normalized, stride, pointer);
         if (GLEmulation.currentVao) { // TODO: avoid object creation here? likely not hot though
           GLEmulation.currentVao.vertexAttribPointers[index] = [index, size, type, normalized, stride, pointer];
@@ -822,8 +847,10 @@ var LibraryGLEmulation = {
   $GLImmediate: {
     MapTreeLib: null,
     spawnMapTreeLib: function() {
-      /* A naive implementation of a map backed by an array, and accessed by
+      /**
+       * A naive implementation of a map backed by an array, and accessed by
        * naive iteration along the array. (hashmap with only one bucket)
+       * @constructor
        */
       function CNaiveListMap() {
         var list = [];
@@ -851,29 +878,32 @@ var LibraryGLEmulation = {
         };
       };
 
-      /* A tree of map nodes.
-        Uses `KeyView`s to allow descending the tree without garbage.
-        Example: {
-          // Create our map object.
-          var map = new ObjTreeMap();
-
-          // Grab the static keyView for the map.
-          var keyView = map.GetStaticKeyView();
-
-          // Let's make a map for:
-          // root: <undefined>
-          //   1: <undefined>
-          //     2: <undefined>
-          //       5: "Three, sir!"
-          //       3: "Three!"
-
-          // Note how we can chain together `Reset` and `Next` to
-          // easily descend based on multiple key fragments.
-          keyView.Reset().Next(1).Next(2).Next(5).Set("Three, sir!");
-          keyView.Reset().Next(1).Next(2).Next(3).Set("Three!");
-        }
-      */
+      /**
+       * A tree of map nodes.
+       * Uses `KeyView`s to allow descending the tree without garbage.
+       * Example: {
+       *   // Create our map object.
+       *   var map = new ObjTreeMap();
+       *
+       *   // Grab the static keyView for the map.
+       *   var keyView = map.GetStaticKeyView();
+       *
+       *   // Let's make a map for:
+       *   // root: <undefined>
+       *   //   1: <undefined>
+       *   //     2: <undefined>
+       *   //       5: "Three, sir!"
+       *   //       3: "Three!"
+       *
+       *   // Note how we can chain together `Reset` and `Next` to
+       *   // easily descend based on multiple key fragments.
+       *   keyView.Reset().Next(1).Next(2).Next(5).Set("Three, sir!");
+       *   keyView.Reset().Next(1).Next(2).Next(3).Set("Three!");
+       * }
+       * @constructor
+       */
       function CMapTree() {
+        /** @constructor */
         function CNLNode() {
           var map = new CNaiveListMap();
 
@@ -894,6 +924,7 @@ var LibraryGLEmulation = {
           };
         }
 
+        /** @constructor */
         function CKeyView(root) {
           var cur;
 
@@ -1135,6 +1166,7 @@ var LibraryGLEmulation = {
 
 
       // Classes:
+      /** @constructor */
       function CTexEnv() {
         this.mode = GL_MODULATE;
         this.colorCombiner = GL_MODULATE;
@@ -1215,7 +1247,7 @@ var LibraryGLEmulation = {
         }
         this.computeKey1 = function() {
           var k = this.traverseKey;
-          key = k[this.colorOp[0]] * 4096;
+          var key = k[this.colorOp[0]] * 4096;
           key += k[this.colorOp[1]] * 1024;
           key += k[this.colorOp[2]] * 256;
           key += k[this.alphaOp[0]] * 16;
@@ -1238,6 +1270,7 @@ var LibraryGLEmulation = {
         }
       }
 
+      /** @constructor */
       function CTexUnit() {
         this.env = new CTexEnv();
         this.enabled_tex1D   = false;
@@ -1569,9 +1602,7 @@ var LibraryGLEmulation = {
           TEX_MATRIX_UNIFORM_PREFIX = uTexMatrixPrefix;
         },
 
-        genAllPassLines: function(resultDest, indentSize) {
-          indentSize = indentSize || 0;
-
+        genAllPassLines: function(resultDest, indentSize = 0) {
           s_requiredTexUnitsForPass.length = 0; // Clear the list.
           var lines = [];
           var lastPassVar = PRIM_COLOR_VARYING;
@@ -2080,6 +2111,11 @@ var LibraryGLEmulation = {
         enabledAttributesKey |= 1 << attributes[i].name;
       }
 
+      // To prevent using more than 31 bits add another level to the maptree
+      // and reset the enabledAttributesKey for the next glemulation state bits
+      keyView.next(enabledAttributesKey);
+      enabledAttributesKey = 0;
+
       // By fog state:
       var fogParam = 0;
       if (GLEmulation.fogEnabled) {
@@ -2108,6 +2144,9 @@ var LibraryGLEmulation = {
         enabledAttributesKey = (enabledAttributesKey << 1) | (GLEmulation.lightingEnabled ? GLEmulation.lightEnabled[lightId] : 0);
       }
 
+      // By alpha testing mode
+      enabledAttributesKey = (enabledAttributesKey << 3) | (GLEmulation.alphaTestEnabled ? (GLEmulation.alphaTestFunc - 0x200) : 0x7);
+
       // By drawing mode:
       enabledAttributesKey = (enabledAttributesKey << 1) | (GLImmediate.mode == GLctx.POINTS ? 1 : 0);
 
@@ -2127,7 +2166,7 @@ var LibraryGLEmulation = {
       var renderer = keyView.get();
       if (!renderer) {
 #if GL_DEBUG
-        err('generating renderer for ' + JSON.stringify(attributes));
+        dbg('generating renderer for ' + JSON.stringify(attributes));
 #endif
         renderer = GLImmediate.createRenderer();
         GLImmediate.currentRenderer = renderer;
@@ -2157,8 +2196,9 @@ var LibraryGLEmulation = {
         hasTextures = true;
       }
 
-      var ret = {
-        init: function init() {
+      /** @constructor */
+      function Renderer() {
+        this.init = function() {
           // For fixed-function shader generation.
           var uTexUnitPrefix = 'u_texUnit';
           var aTexCoordPrefix = 'a_texCoord';
@@ -2337,6 +2377,38 @@ var LibraryGLEmulation = {
               fogPass = 'gl_FragColor = vec4(mix(u_fogColor.rgb, gl_FragColor.rgb, ffog(v_fogFragCoord)), gl_FragColor.a);\n';
             }
 
+            var fsAlphaTestDefs = '';
+            var fsAlphaTestPass = '';
+            if (GLEmulation.alphaTestEnabled) {
+              fsAlphaTestDefs = 'uniform float u_alphaTestRef;';
+              switch (GLEmulation.alphaTestFunc) {
+                case 0x200: // GL_NEVER
+                  fsAlphaTestPass = 'discard;';
+                  break;
+                case 0x201: // GL_LESS
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a < u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x202: // GL_EQUAL
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a == u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x203: // GL_LEQUAL
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a <= u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x204: // GL_GREATER
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a > u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x205: // GL_NOTEQUAL
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a != u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x206: // GL_GEQUAL
+                  fsAlphaTestPass = 'if( !(gl_FragColor.a >= u_alphaTestRef) ) { discard; }';
+                  break;
+                case 0x207: // GL_ALWAYS
+                  fsAlphaTestPass = '';
+                  break;
+              }
+            }
+
             var fsSource = [
               'precision mediump float;',
               texUnitVaryingList,
@@ -2344,11 +2416,13 @@ var LibraryGLEmulation = {
               'varying vec4 v_color;',
               fogHeaderIfNeeded,
               fsClipPlaneDefs,
+              fsAlphaTestDefs,
               'void main()',
               '{',
               fsClipPlanePass,
               fsTexEnvPass,
               fogPass,
+              fsAlphaTestPass,
               '}',
               ''
             ].join("\n").replace(/\n\n+/g, '\n');
@@ -2466,9 +2540,12 @@ var LibraryGLEmulation = {
             this.lightPositionLocation[lightId] = GLctx.getUniformLocation(this.program, 'u_lightPosition' + lightId);
           }
 
-        },
+          this.hasAlphaTest = GLEmulation.alphaTestEnabled;
+          this.alphaTestRefLocation = GLctx.getUniformLocation(this.program, 'u_alphaTestRef');
 
-        prepare: function prepare() {
+        };
+
+        this.prepare = function() {
           // Calculate the array buffer
           var arrayBuffer;
           if (!GLctx.currentArrayBufferBinding) {
@@ -2509,7 +2586,7 @@ var LibraryGLEmulation = {
           if (canSkip) return;
           GLImmediate.lastRenderer = this;
           GLImmediate.lastProgram = GL.currProgram || this.program;
-          GLImmediate.lastStride == GLImmediate.stride;
+          GLImmediate.lastStride = GLImmediate.stride;
           GLImmediate.matricesModified = false;
 #endif
 
@@ -2649,14 +2726,18 @@ var LibraryGLEmulation = {
             }
           }
 
+          if (this.hasAlphaTest) {
+            if (this.alphaTestRefLocation) GLctx.uniform1f(this.alphaTestRefLocation, GLEmulation.alphaTestRef);
+          }
+
           if (GLImmediate.mode == GLctx.POINTS) {
             if (this.pointSizeLocation) {
               GLctx.uniform1f(this.pointSizeLocation, GLEmulation.pointSize);
             }
           }
-        },
+        };
 
-        cleanup: function cleanup() {
+        this.cleanup = function() {
 #if !GL_FFP_ONLY
           GLctx.disableVertexAttribArray(this.positionLocation);
           if (this.hasTextures) {
@@ -2688,9 +2769,10 @@ var LibraryGLEmulation = {
           GLImmediate.matricesModified = true;
 #endif
         }
-      };
-      ret.init();
-      return ret;
+
+        this.init();
+      }
+      return new Renderer();
     },
 
     setupFuncs: function() {
@@ -2712,62 +2794,65 @@ var LibraryGLEmulation = {
       }
 
       var glActiveTexture = _glActiveTexture;
-      _glActiveTexture = _emscripten_glActiveTexture = function _glActiveTexture(texture) {
+      _glActiveTexture = _emscripten_glActiveTexture = (texture) => {
         GLImmediate.TexEnvJIT.hook_activeTexture(texture);
         glActiveTexture(texture);
       };
       {{{ updateExport('glActiveTexture') }}}
 
       var glEnable = _glEnable;
-      _glEnable = _emscripten_glEnable = function _glEnable(cap) {
+      _glEnable = _emscripten_glEnable = (cap) => {
         GLImmediate.TexEnvJIT.hook_enable(cap);
         glEnable(cap);
       };
       {{{ updateExport('glEnable') }}}
 
       var glDisable = _glDisable;
-      _glDisable = _emscripten_glDisable = function _glDisable(cap) {
+      _glDisable = _emscripten_glDisable = (cap) => {
         GLImmediate.TexEnvJIT.hook_disable(cap);
         glDisable(cap);
       };
       {{{ updateExport('glDisable') }}}
 
-      var glTexEnvf = (typeof(_glTexEnvf) != 'undefined') ? _glTexEnvf : function(){};
-      _glTexEnvf = _emscripten_glTexEnvf = function _glTexEnvf(target, pname, param) {
+      var glTexEnvf = (typeof _glTexEnvf != 'undefined') ? _glTexEnvf : () => {};
+      /** @suppress {checkTypes} */
+      _glTexEnvf = _emscripten_glTexEnvf = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_texEnvf(target, pname, param);
         // Don't call old func, since we are the implementor.
         //glTexEnvf(target, pname, param);
       };
       {{{ updateExport('glTexEnvf') }}}
 
-      var glTexEnvi = (typeof(_glTexEnvi) != 'undefined') ? _glTexEnvi : function(){};
-      _glTexEnvi = _emscripten_glTexEnvi = function _glTexEnvi(target, pname, param) {
+      var glTexEnvi = (typeof _glTexEnvi != 'undefined') ? _glTexEnvi : () => {};
+      /** @suppress {checkTypes} */
+      _glTexEnvi = _emscripten_glTexEnvi = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_texEnvi(target, pname, param);
         // Don't call old func, since we are the implementor.
         //glTexEnvi(target, pname, param);
       };
       {{{ updateExport('glTexEnvi') }}}
 
-      var glTexEnvfv = (typeof(_glTexEnvfv) != 'undefined') ? _glTexEnvfv : function(){};
-      _glTexEnvfv = _emscripten_glTexEnvfv = function _glTexEnvfv(target, pname, param) {
+      var glTexEnvfv = (typeof _glTexEnvfv != 'undefined') ? _glTexEnvfv : () => {};
+      /** @suppress {checkTypes} */
+      _glTexEnvfv = _emscripten_glTexEnvfv = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_texEnvfv(target, pname, param);
         // Don't call old func, since we are the implementor.
         //glTexEnvfv(target, pname, param);
       };
       {{{ updateExport('glTexEnvfv') }}}
 
-      _glGetTexEnviv = function _glGetTexEnviv(target, pname, param) {
+      _glGetTexEnviv = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_getTexEnviv(target, pname, param);
       };
       {{{ updateExport('glGetTexEnviv') }}}
 
-      _glGetTexEnvfv = function _glGetTexEnvfv(target, pname, param) {
+      _glGetTexEnvfv = (target, pname, param) => {
         GLImmediate.TexEnvJIT.hook_getTexEnvfv(target, pname, param);
       };
       {{{ updateExport('glGetTexEnvfv') }}}
 
       var glGetIntegerv = _glGetIntegerv;
-      _glGetIntegerv = _emscripten_glGetIntegerv = function _glGetIntegerv(pname, params) {
+      _glGetIntegerv = _emscripten_glGetIntegerv = (pname, params) => {
         switch (pname) {
           case 0x8B8D: { // GL_CURRENT_PROGRAM
             // Just query directly so we're working with WebGL objects.
@@ -2795,7 +2880,8 @@ var LibraryGLEmulation = {
 
       // User can override the maximum number of texture units that we emulate. Using fewer texture units increases runtime performance
       // slightly, so it is advantageous to choose as small value as needed.
-      GLImmediate.MAX_TEXTURES = Module['GL_MAX_TEXTURE_IMAGE_UNITS'] || GLctx.getParameter(GLctx.MAX_TEXTURE_IMAGE_UNITS);
+      // Limit to a maximum of 28 to not overflow the state bits used for renderer caching (31 bits = 3 attributes + 28 texture units).
+      GLImmediate.MAX_TEXTURES = Math.min(Module['GL_MAX_TEXTURE_IMAGE_UNITS'] || GLctx.getParameter(GLctx.MAX_TEXTURE_IMAGE_UNITS), 28);
 
       GLImmediate.TexEnvJIT.init(GLctx, GLImmediate.MAX_TEXTURES);
 
@@ -2979,7 +3065,7 @@ var LibraryGLEmulation = {
           assert(!GLctx.currentElementArrayBufferBinding);
 #endif
           for (var i = 0; i < numProvidedIndexes; i++) {
-            var currIndex = {{{ makeGetValue('ptr', 'i*2', 'i16', null, 1) }}};
+            var currIndex = {{{ makeGetValue('ptr', 'i*2', 'u16') }}};
             GLImmediate.firstVertex = Math.min(GLImmediate.firstVertex, currIndex);
             GLImmediate.lastVertex = Math.max(GLImmediate.lastVertex, currIndex+1);
           }
@@ -3034,7 +3120,6 @@ var LibraryGLEmulation = {
     }
   },
 
-  $GLImmediateSetup: {},
   $GLImmediateSetup__deps: ['$GLImmediate', function() { return 'GLImmediate.matrixLib = ' + read('gl-matrix.js') + ';\n' }],
   $GLImmediateSetup: {},
 
@@ -3306,7 +3391,29 @@ var LibraryGLEmulation = {
 
   glPolygonMode: function(){}, // TODO
 
-  glAlphaFunc: function(){}, // TODO
+  glAlphaFunc: function(func, ref) {
+    switch(func) {
+      case 0x200: // GL_NEVER
+      case 0x201: // GL_LESS
+      case 0x202: // GL_EQUAL
+      case 0x203: // GL_LEQUAL
+      case 0x204: // GL_GREATER
+      case 0x205: // GL_NOTEQUAL
+      case 0x206: // GL_GEQUAL
+      case 0x207: // GL_ALWAYS
+        GLEmulation.alphaTestRef = ref;
+        if (GLEmulation.alphaTestFunc != func) {
+          GLEmulation.alphaTestFunc = func;
+          GLImmediate.currentRenderer = null; // alpha test mode is part of the FFP shader state, we must re-lookup the renderer to use.
+        }
+        break;
+      default: // invalid value provided
+#if GL_ASSERTIONS
+        err('glAlphaFunc: Invalid alpha comparison function 0x' + func.toString(16) + ' !');
+#endif
+        break;
+    }
+  },
 
   glNormal3f: function(x, y, z) {
 #if ASSERTIONS
@@ -3319,6 +3426,11 @@ var LibraryGLEmulation = {
     assert(GLImmediate.vertexCounter << 2 < GL.MAX_TEMP_BUFFER_SIZE);
 #endif
     GLImmediate.addRendererComponent(GLImmediate.NORMAL, 3, GLctx.FLOAT);
+  },
+
+  glNormal3fv__deps: ['glNormal3f'],
+  glNormal3fv: function(p) {
+    _glNormal3f({{{ makeGetValue('p', '0', 'float') }}}, {{{ makeGetValue('p', '4', 'float') }}}, {{{ makeGetValue('p', '8', 'float') }}});
   },
 
 
@@ -3566,7 +3678,7 @@ var LibraryGLEmulation = {
 
   glLoadMatrixf: function(matrix) {
 #if GL_DEBUG
-    if (GL.debug) err('glLoadMatrixf receiving: ' + Array.prototype.slice.call(HEAPF32.subarray(matrix >> 2, (matrix >> 2) + 16)));
+    if (GL.debug) dbg('glLoadMatrixf receiving: ' + Array.prototype.slice.call(HEAPF32.subarray(matrix >> 2, (matrix >> 2) + 16)));
 #endif
     GLImmediate.matricesModified = true;
     GLImmediate.matrixVersion[GLImmediate.currentMatrix] = (GLImmediate.matrixVersion[GLImmediate.currentMatrix] + 1)|0;
@@ -3832,7 +3944,7 @@ var LibraryGLEmulation = {
   },
 
   gluUnProject: function(winX, winY, winZ, model, proj, view, objX, objY, objZ) {
-    var result = GLImmediate.matrixLib.mat4.unproject([winX, winY, winZ],
+    var result = GLImmediate.matrixLib.vec3.unproject([winX, winY, winZ],
         {{{ makeHEAPView('F64', 'model', 'model+' + (16*8)) }}},
         {{{ makeHEAPView('F64', 'proj', 'proj+' + (16*8)) }}},
         {{{ makeHEAPView('32', 'view', 'view+' + (4*4)) }}});

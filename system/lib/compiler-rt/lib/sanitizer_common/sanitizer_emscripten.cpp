@@ -18,16 +18,21 @@
 #include "sanitizer_stoptheworld.h"
 
 #include <signal.h>
+#include <time.h>
 
 #if SANITIZER_EMSCRIPTEN
 
 #include <emscripten.h>
 #include <emscripten/stack.h>
+#include <sys/types.h>
 
 namespace __sanitizer {
 
 extern "C" {
-  int emscripten_get_module_name(char *buf, uptr length);
+char* emscripten_get_module_name(char *buf, size_t length);
+void* emscripten_builtin_mmap(void *addr, size_t length, int prot, int flags,
+                             int fd, off_t offset);
+int emscripten_builtin_munmap(void *addr, size_t length);
 }
 
 void ListOfModules::init() {
@@ -60,28 +65,15 @@ void ListOfModules::init() {
 
 void ListOfModules::fallbackInit() { clear(); }
 
-SANITIZER_WEAK_ATTRIBUTE int
-real_sigaction(int signum, const void *act, void *oldact);
-
 int internal_sigaction(int signum, const void *act, void *oldact) {
-#if !SANITIZER_GO
-  if (&real_sigaction)
-    return real_sigaction(signum, act, oldact);
-#endif
   return sigaction(signum, (const struct sigaction *)act,
                    (struct sigaction *)oldact);
-}
-
-extern "C" {
-  uptr emscripten_builtin_mmap2(void *addr, uptr length, int prot, int flags,
-                               int fd, unsigned offset);
-  uptr emscripten_builtin_munmap(void *addr, uptr length);
 }
 
 uptr internal_mmap(void *addr, uptr length, int prot, int flags, int fd,
                    u64 offset) {
   CHECK(IsAligned(offset, 4096));
-  return emscripten_builtin_mmap2(addr, length, prot, flags, fd, offset / 4096);
+  return (uptr)emscripten_builtin_mmap(addr, length, prot, flags, fd, offset / 4096);
 }
 
 uptr internal_munmap(void *addr, uptr length) {
@@ -133,6 +125,12 @@ void StopTheWorld(StopTheWorldCallback callback, void *argument) {
 }
 
 void InitializePlatformCommonFlags(CommonFlags *cf) {}
+
+u64 MonotonicNanoTime() {
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (u64)ts.tv_sec * (1000ULL * 1000 * 1000) + ts.tv_nsec;
+}
 
 } // namespace __sanitizer
 

@@ -21,6 +21,12 @@ mergeInto(LibraryManager.library, {
                       : Math.pow(2, bits)         + value;
   },
 
+  $strLen: function(ptr) {
+    var end = ptr;
+    while (HEAPU8[end]) ++end;
+    return end - ptr;
+  },
+
   // Converts a value we have as unsigned, into a signed value. For
   // example, 200 in a uint8 would be a negative number.
   $reSign: function(value, bits) {
@@ -46,10 +52,7 @@ mergeInto(LibraryManager.library, {
   //   varargs: A pointer to the start of the arguments list.
   // Returns the resulting string string as a character array.
   $formatString__deps: ['$reallyNegative', '$convertI32PairToI53', '$convertU32PairToI53',
-                        '$reSign', '$unSign', 'strlen'
-#if MINIMAL_RUNTIME
-    , '$intArrayFromString'
-#endif
+                        '$reSign', '$unSign', '$strLen', '$intArrayFromString'
   ],
   $formatString: function(format, varargs) {
 #if ASSERTIONS
@@ -81,18 +84,18 @@ mergeInto(LibraryManager.library, {
       var ret;
       argIndex = prepVararg(argIndex, type);
       if (type === 'double') {
-        ret = {{{ makeGetValue('argIndex', 0, 'double', undefined, undefined, true) }}};
+        ret = {{{ makeGetValue('argIndex', 0, 'double') }}};
         argIndex += 8;
       } else if (type == 'i64') {
-        ret = [{{{ makeGetValue('argIndex', 0, 'i32', undefined, undefined, true, 4) }}},
-               {{{ makeGetValue('argIndex', 4, 'i32', undefined, undefined, true, 4) }}}];
+        ret = [{{{ makeGetValue('argIndex', 0, 'i32') }}},
+               {{{ makeGetValue('argIndex', 4, 'i32') }}}];
         argIndex += 8;
       } else {
 #if ASSERTIONS
         assert((argIndex & 3) === 0);
 #endif
         type = 'i32'; // varargs are always i32, i64, or double
-        ret = {{{ makeGetValue('argIndex', 0, 'i32', undefined, undefined, true) }}};
+        ret = {{{ makeGetValue('argIndex', 0, 'i32') }}};
         argIndex += 4;
       }
       return ret;
@@ -238,9 +241,9 @@ mergeInto(LibraryManager.library, {
             var currAbsArg = Math.abs(currArg);
             var prefix = '';
             if (next == {{{ charCode('d') }}} || next == {{{ charCode('i') }}}) {
-              argText = reSign(currArg, 8 * argSize, 1).toString(10);
+              argText = reSign(currArg, 8 * argSize).toString(10);
             } else if (next == {{{ charCode('u') }}}) {
-              argText = unSign(currArg, 8 * argSize, 1).toString(10);
+              argText = unSign(currArg, 8 * argSize).toString(10);
               currArg = Math.abs(currArg);
             } else if (next == {{{ charCode('o') }}}) {
               argText = (flagAlternative ? '0' : '') + currAbsArg.toString(8);
@@ -408,7 +411,7 @@ mergeInto(LibraryManager.library, {
           case 's': {
             // String.
             var arg = getNextArg('i8*');
-            var argLength = arg ? _strlen(arg) : '(null)'.length;
+            var argLength = arg ? strLen(arg) : '(null)'.length;
             if (precisionSet) argLength = Math.min(argLength, precision);
             if (!flagLeftAlign) {
               while (argLength < width--) {
@@ -417,7 +420,7 @@ mergeInto(LibraryManager.library, {
             }
             if (arg) {
               for (var i = 0; i < argLength; i++) {
-                ret.push({{{ makeGetValue('arg++', 0, 'i8', null, true) }}});
+                ret.push({{{ makeGetValue('arg++', 0, 'u8') }}});
               }
             } else {
               ret = ret.concat(intArrayFromString('(null)'.substr(0, argLength), true));
@@ -465,37 +468,6 @@ mergeInto(LibraryManager.library, {
       }
     }
     return ret;
-  },
-
-  // printf/puts/strlen implementations for when musl is not pulled in - very
-  // partial. useful for tests, and when bootstrapping structInfo
-  strlen: function(ptr) {
-    var end = ptr;
-    while (HEAPU8[end]) ++end;
-    return end - ptr;
-  },
-  printf__deps: ['$formatString'
-#if MINIMAL_RUNTIME
-    , '$intArrayToString'
-#endif
-    ],
-  printf: function(format, varargs) {
-    // int printf(const char *restrict format, ...);
-    // http://pubs.opengroup.org/onlinepubs/000095399/functions/printf.html
-    // extra effort to support printf, even without a filesystem. very partial, very hackish
-    var result = formatString(format, varargs);
-    var string = intArrayToString(result);
-    if (string[string.length-1] === '\n') string = string.substr(0, string.length-1); // remove a final \n, as Module.print will do that
-    out(string);
-    return result.length;
-  },
-  puts: function(s) {
-    // extra effort to support puts, even without a filesystem. very partial, very hackish
-    var result = UTF8ToString(s);
-    var string = result.substr(0);
-    if (string[string.length-1] === '\n') string = string.substr(0, string.length-1); // remove a final \n, as Module.print will do that
-    out(string);
-    return result.length;
   },
 });
 

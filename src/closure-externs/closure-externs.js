@@ -70,120 +70,88 @@ Atomics.store = function() {};
 var WebAssembly = {};
 /**
  * @constructor
- * @param {!BufferSource} bytes
+ * @param {Object} globalDescriptor
+ * @param {*=} value
  */
-WebAssembly.Module = function(bytes) {};
+WebAssembly.Global = function(globalDescriptor, value) {};
 /**
  * @constructor
- * @param {!WebAssembly.Module} moduleObject
- * @param {Object=} importObject
+ * @param {Object} type
  */
-WebAssembly.Instance = function(moduleObject, importObject) {};
+WebAssembly.Tag = function(type) {};
 /**
  * @constructor
- * @param {MemoryDescriptor} memoryDescriptor
+ * @param {!WebAssembly.Tag} tag
+ * @param {Array<Object>} payload
+ * @param {Object=} options
  */
-WebAssembly.Memory = function(memoryDescriptor) {};
+WebAssembly.Exception = function(tag, payload, options) {};
 /**
- * @constructor
- * @param {TableDescriptor} tableDescriptor
+ * @param {!WebAssembly.Tag} tag
+ * @param {number} index
  */
-WebAssembly.Table = function(tableDescriptor) {};
+WebAssembly.Exception.getArg = function(tag, index) {};
 /**
- * @constructor
- * @param {GlobalDescriptotr} globalDescriptor
+ * @param {!WebAssembly.Tag} tag
  */
-WebAssembly.Global = function(globalDescriptor) {};
+WebAssembly.Exception.is = function(tag) {};
 /**
- * @constructor
- * @extends {Error}
+ * @type {string}
  */
-WebAssembly.CompileError = function() {};
-/**
- * @constructor
- * @extends {Error}
- */
-WebAssembly.LinkError = function() {};
-/**
- * @constructor
- * @param {string=} message
- * @param {string=} fileName
- * @param {number=} lineNumber
- * @extends {Error}
- */
-WebAssembly.RuntimeError = function(message, fileName, lineNumber) {};
+WebAssembly.Exception.stack;
+
 /**
  * Note: Closure compiler does not support function overloading, omit this overload for now.
  * {function(!WebAssembly.Module, Object=):!Promise<!WebAssembly.Instance>}
  */
-/**
- * @param {!BufferSource} moduleObject
- * @param {Object=} importObject
- * @return {!Promise<{module:WebAssembly.Module, instance:WebAssembly.Instance}>}
- */
-WebAssembly.instantiate = function(moduleObject, importObject) {};
-/**
- * @param {!Promise<!Response>|!Response} source
- * @param {Object=} importObject
- * @return {!Promise<{module:WebAssembly.Module, instance:WebAssembly.Instance}>}
- */
-WebAssembly.instantiateStreaming = function(source, importObject) {};
-/**
- * @param {!BufferSource} bytes
- * @return {!Promise<!WebAssembly.Module>}
- */
-WebAssembly.compile = function(bytes) {};
-/**
- * @param {!BufferSource} bytes
- * @return {boolean}
- */
-WebAssembly.validate = function(bytes) {};
-/**
- * @param {!WebAssembly.Module} moduleObject
- * @return {!Array<{name:string, kind:string}>}
- */
-WebAssembly.Module.exports = function(moduleObject) {};
-/**
- * @param {!WebAssembly.Module} moduleObject
- * @return {!Array<{module:string, name:string, kind:string}>}
- */
-WebAssembly.Module.imports = function(moduleObject) {};
-/**
- * @param {!WebAssembly.Module} moduleObject
- * @param {string} sectionName
- * @return {!Array<!ArrayBuffer>}
- */
-WebAssembly.Module.customSections = function(moduleObject, sectionName) {};
 /** @dict */
 WebAssembly.Instance.prototype.exports;
-/**
- * @param {number} delta
- * @return {number}
- */
-WebAssembly.Memory.prototype.grow = function(delta) {};
 /**
  * @type {!ArrayBuffer}
  */
 WebAssembly.Memory.prototype.buffer;
 /**
- * @param {number} delta
- * @return {number}
- */
-WebAssembly.Table.prototype.grow = function(delta) {};
-/**
  * @type {number}
  */
 WebAssembly.Table.prototype.length;
+
 /**
- * @param {number} index
- * @return {function(...)}
+ * @record
  */
-WebAssembly.Table.prototype.get = function(index) {};
+function FunctionType() {}
 /**
- * @param {number} index
- * @param {?function(...)} value
+ * @type {Array<string>}
  */
-WebAssembly.Table.prototype.set = function(index, value) {};
+FunctionType.prototype.parameters;
+/**
+ * @type {Array<string>}
+ */
+FunctionType.prototype.results;
+/**
+ * @record
+ */
+ function FunctionUsage() {}
+ /**
+  * @type {string|undefined}
+  */
+FunctionUsage.prototype.promising;
+ /**
+  * @type {string|undefined}
+  */
+FunctionUsage.prototype.suspending;
+
+/**
+ * @constructor
+ * @param {!FunctionType} type
+ * @param {!Function} func
+ * @param {FunctionUsage=} usage
+ */
+WebAssembly.Function = function(type, func, usage) {};
+/**
+ * @param {Function} func
+ * @return {FunctionType}
+ */
+WebAssembly.Function.type = function(func) {};
 
 /**
  * @suppress {undefinedVars}
@@ -282,9 +250,6 @@ var devicePixelRatio;
 /** @suppress {duplicate} */
 var noExitRuntime;
 
-/** @type {?AudioWorklet} */
-BaseAudioContext.prototype.audioWorklet;
-
 /*
  * AudioWorkletGlobalScope globals
  */
@@ -296,8 +261,42 @@ var sampleRate;
 /*
  * WebGPU globals
  */
-var GPUValidationError;
+var GPUBufferUsage;
+var GPUColorWrite;
+var GPUMapMode;
+var GPUShaderStage;
+var GPUTextureUsage;
+var GPU;
+var GPUAdapter;
+var GPUBindGroup;
+var GPUBindGroupLayout;
+var GPUBuffer;
+var GPUCanvasContext;
+var GPUCommandBuffer;
+var GPUCommandEncoder;
+var GPUCompilationInfo;
+var GPUCompilationMessage;
+var GPUComputePassEncoder;
+var GPUComputePipeline;
+var GPUDevice;
+var GPUDeviceLostInfo;
+var GPUExternalTexture;
 var GPUOutOfMemoryError;
+var GPUPipelineLayout;
+var GPUQuerySet;
+var GPUQueue;
+var GPURenderBundle;
+var GPURenderBundleEncoder;
+var GPURenderPassEncoder;
+var GPURenderPipeline;
+var GPUSampler;
+var GPUShaderModule;
+var GPUSupportedFeatures;
+var GPUSupportedLimits;
+var GPUTexture;
+var GPUTextureView;
+var GPUUncapturedErrorEvent;
+var GPUValidationError;
 
 /*
  * Avoid closure minifying anything to "id". See #13965

@@ -19,30 +19,36 @@ function run() {
   // User requested the PROXY_TO_PTHREAD option, so call a stub main which
   // pthread_create()s a new thread that will call the user's real main() for
   // the application.
-  var ret = _emscripten_proxy_main();
+  var ret = __emscripten_proxy_main();
 #else
   var ret = _main();
 
 #if EXIT_RUNTIME
-#if USE_PTHREADS
-  PThread.runExitHandlers();
-#endif
   callRuntimeCallbacks(__ATEXIT__);
   <<< ATEXITS >>>
+#if USE_PTHREADS
+  PThread.terminateAllThreads();
 #endif
 
-#if IN_TEST_HARNESS
-  // fflush() filesystem stdio for test harness, since there are existing
+#endif
+
+#if IN_TEST_HARNESS && hasExportedSymbol('flush')
+  // flush any stdio streams for test harness, since there are existing
   // tests that depend on this behavior.
   // For production use, instead print full lines to avoid this kind of lazy
   // behavior.
-  if (typeof _fflush !== 'undefined') _fflush();
+  _fflush();
 #endif
+
+#if EXIT_RUNTIME
 
 #if ASSERTIONS
   runtimeExited = true;
 #endif
+
+  _proc_exit(ret);
 #endif
+#endif // PROXY_TO_PTHREAD
 
 #if STACK_OVERFLOW_CHECK
   checkStackCookie();
@@ -56,16 +62,18 @@ function initRuntime(asm) {
 #endif
 
 #if USE_PTHREADS
-  // Export needed variables that worker.js needs to Module.
-  Module['_emscripten_tls_init'] = _emscripten_tls_init;
-  Module['HEAPU32'] = HEAPU32;
-  Module['__emscripten_thread_init'] = __emscripten_thread_init;
-  Module['_pthread_self'] = _pthread_self;
-
   if (ENVIRONMENT_IS_PTHREAD) {
-    PThread.initWorker();
+    // Export needed variables that worker.js needs to Module.
+    Module['HEAPU32'] = HEAPU32;
+    Module['__emscripten_thread_init'] = __emscripten_thread_init;
+    Module['__emscripten_thread_exit'] = __emscripten_thread_exit;
+    Module['_pthread_self'] = _pthread_self;
     return;
   }
+#endif
+
+#if WASM_WORKERS
+  if (ENVIRONMENT_IS_WASM_WORKER) return __wasm_worker_initializeRuntime();
 #endif
 
 #if STACK_OVERFLOW_CHECK
@@ -76,7 +84,11 @@ function initRuntime(asm) {
 #endif
 #endif
 
-#if hasExportedFunction('___wasm_call_ctors')
+#if USE_PTHREADS
+  PThread.tlsInitFunctions.push(asm['_emscripten_tls_init']);
+#endif
+
+#if hasExportedSymbol('__wasm_call_ctors')
   asm['__wasm_call_ctors']();
 #endif
 
@@ -187,6 +199,10 @@ WebAssembly.instantiate(Module['wasm'], imports).then(function(output) {
   asm = output.instance.exports;
 #endif
 
+#if MEMORY64
+  asm = instrumentWasmExportsForMemory64(asm);
+#endif
+
 #if USE_OFFSET_CONVERTER
 #if USE_PTHREADS
   if (!ENVIRONMENT_IS_PTHREAD)
@@ -223,7 +239,7 @@ WebAssembly.instantiate(Module['wasm'], imports).then(function(output) {
   initRuntime(asm);
 #if USE_PTHREADS && PTHREAD_POOL_SIZE
   if (!ENVIRONMENT_IS_PTHREAD) loadWasmModuleToWorkers();
-#if !PTHREAD_POOL_DELAY_LOAD  
+#if !PTHREAD_POOL_DELAY_LOAD
   else
 #endif
     ready();
@@ -234,20 +250,20 @@ WebAssembly.instantiate(Module['wasm'], imports).then(function(output) {
 #if USE_PTHREADS
   // This Worker is now ready to host pthreads, tell the main thread we can proceed.
   if (ENVIRONMENT_IS_PTHREAD) {
-    moduleLoaded();
     postMessage({ 'cmd': 'loaded' });
   }
 #endif
+}
 
 #if ASSERTIONS || WASM == 2
-}).catch(function(error) {
+, function(error) {
 #if ASSERTIONS
   console.error(error);
 #endif
 
 #if WASM == 2
 #if ENVIRONMENT_MAY_BE_NODE || ENVIRONMENT_MAY_BE_SHELL
-  if (typeof location !== 'undefined') {
+  if (typeof location != 'undefined') {
 #endif
     // WebAssembly compilation failed, try running the JS fallback instead.
     var search = location.search;
@@ -258,5 +274,6 @@ WebAssembly.instantiate(Module['wasm'], imports).then(function(output) {
   }
 #endif
 #endif // WASM == 2
+}
 #endif // ASSERTIONS || WASM == 2
-});
+);

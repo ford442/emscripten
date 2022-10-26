@@ -5,18 +5,15 @@
  */
 
 var MAGIC = 0;
-Math.random = function() {
+Math.random = () => {
   MAGIC = Math.pow(MAGIC + 1.8912, 3) % 1;
   return MAGIC;
 };
 var TIME = 10000;
-Date.now = function() {
-  return TIME++;
-};
-if (typeof performance === 'object') performance.now = Date.now;
+Date.now = () => TIME++;
+if (typeof performance == 'object') performance.now = Date.now;
 if (ENVIRONMENT_IS_NODE) process['hrtime'] = Date.now;
 
-if (!Module) Module = {};
 Module['thisProgram'] = 'thisProgram'; // for consistency between different builds than between runs of the same build
 
 function hashMemory(id) {

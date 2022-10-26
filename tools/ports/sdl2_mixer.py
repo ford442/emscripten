@@ -4,24 +4,23 @@
 # found in the LICENSE file.
 
 import os
-import shutil
 import logging
 
-TAG = 'release-2.0.2'
-HASH = 'b9d03061d177f20f4e03f3e3553afd7bfe0c05da7b9a774312b389318e747cf9724e0475e9afff6a64ce31bab0217e2afb2619d75556753fbbb6ecafa9775219'
+TAG = 'release-2.0.4'
+HASH = '5ba387f997219a1deda868f380bf7ee8bc0842261dd54772ad2d560f5282fcbe7bc130e8d16dccc259eeb8cda993a0f34cd3be103fc38f8c6a68428a10e5db4c'
 
 deps = ['sdl2']
+variants = {
+  'sdl2_mixer_mp3': {'SDL2_MIXER_FORMATS': ["mp3"]},
+  'sdl2_mixer_none': {'SDL2_MIXER_FORMATS': []},
+}
 
 
 def needed(settings):
   return settings.USE_SDL_MIXER == 2
 
 
-def get(ports, settings, shared):
-  sdl_build = os.path.join(ports.get_build_dir(), 'sdl2')
-  assert os.path.exists(sdl_build), 'You must use SDL2 to use SDL2_mixer'
-  ports.fetch_project('sdl2_mixer', 'https://github.com/emscripten-ports/SDL2_mixer/archive/' + TAG + '.zip', 'SDL2_mixer-' + TAG, sha512hash=HASH)
-
+def get_lib_name(settings):
   settings.SDL2_MIXER_FORMATS.sort()
   formats = '-'.join(settings.SDL2_MIXER_FORMATS)
 
@@ -30,43 +29,54 @@ def get(ports, settings, shared):
     libname += '_' + formats
   libname += '.a'
 
+  return libname
+
+
+def get(ports, settings, shared):
+  sdl_build = os.path.join(ports.get_build_dir(), 'sdl2')
+  assert os.path.exists(sdl_build), 'You must use SDL2 to use SDL2_mixer'
+  ports.fetch_project('sdl2_mixer', 'https://github.com/libsdl-org/SDL_mixer/archive/' + TAG + '.zip', 'SDL2_mixer-' + TAG, sha512hash=HASH)
+  libname = get_lib_name(settings)
+
   def create(final):
     logging.info('building port: sdl2_mixer')
 
-    source_path = os.path.join(ports.get_dir(), 'sdl2_mixer', 'SDL2_mixer-' + TAG)
-    dest_path = os.path.join(ports.get_build_dir(), 'sdl2_mixer')
-
-    shutil.rmtree(dest_path, ignore_errors=True)
-    shutil.copytree(source_path, dest_path)
-
+    source_path = os.path.join(ports.get_dir(), 'sdl2_mixer', 'SDL_mixer-' + TAG)
     flags = [
-      '-s', 'USE_SDL=2',
+      '-sUSE_SDL=2',
       '-O2',
       '-DMUSIC_WAV',
     ]
 
     if "ogg" in settings.SDL2_MIXER_FORMATS:
       flags += [
-        '-s', 'USE_VORBIS=1',
+        '-sUSE_VORBIS',
         '-DMUSIC_OGG',
       ]
 
     if "mp3" in settings.SDL2_MIXER_FORMATS:
       flags += [
-        '-s', 'USE_MPG123=1',
+        '-Wno-incompatible-function-pointer-types',
+        '-sUSE_MPG123',
         '-DMUSIC_MP3_MPG123',
       ]
 
     if "mod" in settings.SDL2_MIXER_FORMATS:
       flags += [
-        '-s', 'USE_MODPLUG=1',
+        '-sUSE_MODPLUG',
         '-DMUSIC_MOD_MODPLUG',
       ]
 
+    if "mid" in settings.SDL2_MIXER_FORMATS:
+      flags += [
+        '-DMUSIC_MID_TIMIDITY',
+      ]
+
+    build_dir = ports.clear_project_build('sdl2_mixer')
     ports.build_port(
-      dest_path,
+      source_path,
       final,
-      includes=[],
+      build_dir,
       flags=flags,
       exclude_files=[
         'playmus.c',
@@ -74,7 +84,6 @@ def get(ports, settings, shared):
       ],
       exclude_dirs=[
         'native_midi',
-        'timidity',
         'external',
       ]
     )
@@ -86,7 +95,7 @@ def get(ports, settings, shared):
 
 
 def clear(ports, settings, shared):
-  shared.Cache.erase_lib('libSDL2_mixer.a')
+  shared.Cache.erase_lib(get_lib_name(settings))
 
 
 def process_dependencies(settings):

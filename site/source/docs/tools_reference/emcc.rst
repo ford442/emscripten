@@ -28,7 +28,7 @@ Most `clang options <http://linux.die.net/man/1/clang>`_ will work, as will `gcc
   # Display this information
   emcc --help
 
-  Display compiler version information
+  # Display compiler version information
   emcc --version
 
 
@@ -62,7 +62,7 @@ Options that are modified or new in *emcc* are listed below:
   [compile+link]
   Like ``-O1``, but enables more optimizations. During link this will also enable various JavaScript optimizations.
 
-  .. note:: These JavaScript optimizations can reduce code size by removing things that the compiler does not see being used, in particular, parts of the runtime may be stripped if they are not exported on the ``Module`` object. The compiler is aware of code in :ref:`--pre-js <emcc-pre-js>` and :ref:`--post-js <emcc-post-js>`, so you can safely use the runtime from there. Alternatively, you can use ``EXTRA_EXPORTED_RUNTIME_METHODS``, see `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_.
+  .. note:: These JavaScript optimizations can reduce code size by removing things that the compiler does not see being used, in particular, parts of the runtime may be stripped if they are not exported on the ``Module`` object. The compiler is aware of code in :ref:`--pre-js <emcc-pre-js>` and :ref:`--post-js <emcc-post-js>`, so you can safely use the runtime from there. Alternatively, you can use ``EXPORTED_RUNTIME_METHODS``, see `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_.
 
 .. _emcc-O3:
 
@@ -88,43 +88,48 @@ Options that are modified or new in *emcc* are listed below:
 
 .. _emcc-s-option-value:
 
-``-s OPTION[=VALUE]``
+``-sOPTION[=VALUE]``
   [different OPTIONs affect at different stages, most at link time]
   Emscripten build options. For the available options, see `src/settings.js <https://github.com/emscripten-core/emscripten/blob/main/src/settings.js>`_.
 
-  .. note:: You can prefix boolean options with ``NO_`` to reverse them. For example, ``-s EXIT_RUNTIME=1`` is the same as ``-s NO_EXIT_RUNTIME=0``.
-
   .. note:: If no value is specifed it will default to ``1``.
 
-  .. note:: Lists can be specified without or without quotes around each element and with or without brackets around the list.  For example all the following are equivelent:
+  .. note:: It is possible, with boolean options, to use the ``NO_`` prefix to reverse their meaning. For example, ``-sEXIT_RUNTIME=0`` is the same as ``-sNO_EXIT_RUNTIME=1`` and vice versa.  This is not recommended in most cases.
+
+  .. note:: Lists can be specified as comma separated strings:
 
     ::
 
-      -s EXPORTED_FUNCTIONS=foo,bar
-      -s EXPORTED_FUNCTIONS="foo","bar"
-      -s EXPORTED_FUNCTIONS=["foo","bar"]
-      -s EXPORTED_FUNCTIONS=[foo,bar]
+      -sEXPORTED_FUNCTIONS=foo,bar
+
+  .. note:: We also support older list formats that involve more quoting.  Lists can be specified with or without quotes around each element and with or without brackets around the list.  For example, all the following are equivalent:
+
+    ::
+
+      -sEXPORTED_FUNCTIONS="foo","bar"
+      -sEXPORTED_FUNCTIONS=["foo","bar"]
+      -sEXPORTED_FUNCTIONS=[foo,bar]
 
   .. note:: For lists that include brackets or quote, you need quotation marks (") around the list in most shells (to avoid errors being raised). Two examples are shown below:
 
     ::
 
-      -s EXPORTED_FUNCTIONS="['liblib.so']"
-      -s "EXPORTED_FUNCTIONS=['liblib.so']"
+      -sEXPORTED_FUNCTIONS="['liblib.so']"
+      -s"EXPORTED_FUNCTIONS=['liblib.so']"
 
   You can also specify that the value of an option will be read from a file. For example, the following will set ``EXPORTED_FUNCTIONS`` based on the contents of the file at **path/to/file**.
 
   ::
 
-    -s EXPORTED_FUNCTIONS=@/path/to/file
+    -sEXPORTED_FUNCTIONS=@/path/to/file
 
   .. note::
 
     - In this case the file should contain a list of symbols, one per line.  For legacy use cases JSON-formatted files are also supported: e.g. ``["_func1", "func2"]``.
     - The specified file path must be absolute, not relative.
 
-  .. note:: Options can be specified as a single argument without a space
-            between the ``-s`` and option name.  e.g. ``-sFOO=1``.
+  .. note:: Options can be specified as a single argument with or without a space
+            between the ``-s`` and option name.  e.g. ``-sFOO`` or ``-s FOO``.
 
 .. _emcc-g:
 
@@ -144,7 +149,7 @@ Options that are modified or new in *emcc* are listed below:
   otherwise the same as the wasm file but with suffix ``.debug.wasm``. While
   the main file contains no debug info, it does contain a URL to where the
   debug file is, so that devtools can find it. You can use
-  ``-s SEPARATE_DWARF_URL=URL`` to customize that location (this is useful if
+  ``-sSEPARATE_DWARF_URL=URL`` to customize that location (this is useful if
   you want to host it on a different server, for example).
 
 .. _emcc-gsource-map:
@@ -202,7 +207,7 @@ Options that are modified or new in *emcc* are listed below:
   can still reconstruct meaningful stack traces by translating the indexes back
   to the names.
 
-  .. note:: When used with ``-s WASM=2``, two symbol files are created. ``[name].js.symbols`` (with WASM symbols) and ``[name].wasm.js.symbols`` (with ASM.js symbols)
+  .. note:: When used with ``-sWASM=2``, two symbol files are created. ``[name].js.symbols`` (with WASM symbols) and ``[name].wasm.js.symbols`` (with ASM.js symbols)
 
 .. _emcc-lto:
 
@@ -222,11 +227,18 @@ Options that are modified or new in *emcc* are listed below:
 
   .. note::
 
-    - Consider using ``-s MODULARIZE=1`` when using closure, as it minifies globals to names that might conflict with others in the global scope. ``MODULARIZE`` puts all the output into a function (see ``src/settings.js``).
+    - Consider using ``-sMODULARIZE`` when using closure, as it minifies globals to names that might conflict with others in the global scope. ``MODULARIZE`` puts all the output into a function (see ``src/settings.js``).
     - Closure will minify the name of `Module` itself, by default! Using ``MODULARIZE`` will solve that as well. Another solution is to make sure a global variable called `Module` already exists before the closure-compiled code runs, because then it will reuse that variable.
     - If closure compiler hits an out-of-memory, try adjusting ``JAVA_HEAP_SIZE`` in the environment (for example, to 4096m for 4GB).
     - Closure is only run if JavaScript opts are being done (``-O2`` or above).
 
+``--closure-args=<args>``
+   [link]
+   Pass arguments to the :term:`Closure compiler`. This is an alternative to ``EMCC_CLOSURE_ARGS``.
+
+   For example, one might want to pass an externs file to avoid minifying JS functions defined in ``--pre-js`` or ``--post-js`` files.
+   To pass to Closure the ``externs.js`` file containing those public APIs that should not be minified, one would add the flag:
+   ``--closure-args=--externs=path/to/externs.js``
 
 .. _emcc-pre-js:
 
@@ -329,7 +341,7 @@ Options that are modified or new in *emcc* are listed below:
 
 ``--bind``
   [link]
-  Compiles the source code using the :ref:`embind` bindings to connect C/C++ and JavaScript.
+  Links against embind library.  Deprecated: Use ``-lembind`` instead.
 
 ``--ignore-dynamic-linking``
   [link]
@@ -451,7 +463,7 @@ Options that are modified or new in *emcc* are listed below:
 
 ``--threadprofiler``
   [link]
-  Embeds a thread activity profiler onto the generated page. Use this to profile the application usage of pthreads when targeting multithreaded builds (-s USE_PTHREADS=1/2).
+  Embeds a thread activity profiler onto the generated page. Use this to profile the application usage of pthreads when targeting multithreaded builds (-sUSE_PTHREADS=1/2).
 
 .. _emcc-config:
 
@@ -463,15 +475,12 @@ Options that are modified or new in *emcc* are listed below:
   This can be overridden using the ``EM_CONFIG`` environment variable.
 
 ``--default-obj-ext <.ext>``
-  [compile+link]
-  Specifies the file suffix to generate if the location of a directory name is passed to the ``-o`` directive.
-
-  For example, consider the following command, which will by default generate an output name **dir/a.o**. With ``--default-obj-ext .ext`` the generated file has the custom suffix *dir/a.ext*.
-
-  ::
-
-    emcc -c a.c -o dir/
-
+  [compile]
+  Specifies the output suffix to use when compiling with ``-c`` in the absence
+  of ``-o``.  For example, when compiling multiple sources files with ``emcc -c
+  *.c`` the compiler will normally output files with the ``.o`` extension, but
+  ``--default-obj-ext .obj`` can be used to instead generate files with the
+  `.obj` extension.
 
 ``--valid-abspath <path>``
   [compile+link]
@@ -515,8 +524,6 @@ Environment variables
 =====================
 *emcc* is affected by several environment variables, as listed below:
 
-  - ``EMMAKEN_CFLAGS`` [compile+link]
-  - ``EMMAKEN_COMPILER`` [compile+link] Deprecated. Avoid using.
   - ``EMMAKEN_JUST_CONFIGURE`` [other]
   - ``EMCC_AUTODEBUG`` [compile+link]
   - ``EMCC_CFLAGS`` [compile+link]
@@ -538,16 +545,15 @@ Environment variables
 Search for 'os.environ' in `emcc.py <https://github.com/emscripten-core/emscripten/blob/main/emcc.py>`_ to see how these are used. The most interesting is possibly ``EMCC_DEBUG``, which forces the compiler to dump its build and temporary files to a temporary directory where they can be reviewed.
 
 
-.. todo:: In case we choose to document them properly in future, below are some of the :ref:`-s <emcc-s-option-value>` options that are documented in the site are listed below. Note that this is not exhaustive by any means:
+.. todo:: In case we choose to document them properly in future, below are some of the :ref:`-s<emcc-s-option-value>` options that are documented in the site are listed below. Note that this is not exhaustive by any means:
 
-  - ``-s FULL_ES2=1``
-  - ``-s LEGACY_GL_EMULATION=1``:
+  - ``-sFULL_ES2``
+  - ``-sLEGACY_GL_EMULATION``:
 
-    - ``-s GL_UNSAFE_OPTS=1``
-    - ``-s GL_FFP_ONLY=1``
+    - ``-sGL_UNSAFE_OPTS``
+    - ``-sGL_FFP_ONLY``
 
   - ASSERTIONS
   - SAFE_HEAP
-  - -s DISABLE_EXCEPTION_CATCHING=0.
+  - -sDISABLE_EXCEPTION_CATCHING=0
   - INLINING_LIMIT=
-

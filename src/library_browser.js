@@ -10,22 +10,27 @@ var LibraryBrowser = {
     '$setMainLoop',
     '$callUserCallback',
     '$safeSetTimeout',
+    '$warnOnce',
     'emscripten_set_main_loop_timing',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush',
-    '$runtimeKeepalivePop'
-#endif
   ],
-  $Browser__postset: 'Module["requestFullscreen"] = function Module_requestFullscreen(lockPointer, resizeCanvas) { Browser.requestFullscreen(lockPointer, resizeCanvas) };\n' + // exports
+  $Browser__postset: `
+    // exports
+    Module["requestFullscreen"] = function Module_requestFullscreen(lockPointer, resizeCanvas) { Browser.requestFullscreen(lockPointer, resizeCanvas) };
 #if ASSERTIONS
-                     'Module["requestFullScreen"] = function Module_requestFullScreen() { Browser.requestFullScreen() };\n' +
+    Module["requestFullScreen"] = function Module_requestFullScreen() { Browser.requestFullScreen() };
 #endif
-                     'Module["requestAnimationFrame"] = function Module_requestAnimationFrame(func) { Browser.requestAnimationFrame(func) };\n' +
-                     'Module["setCanvasSize"] = function Module_setCanvasSize(width, height, noUpdates) { Browser.setCanvasSize(width, height, noUpdates) };\n' +
-                     'Module["pauseMainLoop"] = function Module_pauseMainLoop() { Browser.mainLoop.pause() };\n' +
-                     'Module["resumeMainLoop"] = function Module_resumeMainLoop() { Browser.mainLoop.resume() };\n' +
-                     'Module["getUserMedia"] = function Module_getUserMedia() { Browser.getUserMedia() }\n' +
-                     'Module["createContext"] = function Module_createContext(canvas, useWebGL, setInModule, webGLContextAttributes) { return Browser.createContext(canvas, useWebGL, setInModule, webGLContextAttributes) }',
+    Module["requestAnimationFrame"] = function Module_requestAnimationFrame(func) { Browser.requestAnimationFrame(func) };
+    Module["setCanvasSize"] = function Module_setCanvasSize(width, height, noUpdates) { Browser.setCanvasSize(width, height, noUpdates) };
+    Module["pauseMainLoop"] = function Module_pauseMainLoop() { Browser.mainLoop.pause() };
+    Module["resumeMainLoop"] = function Module_resumeMainLoop() { Browser.mainLoop.resume() };
+    Module["getUserMedia"] = function Module_getUserMedia() { Browser.getUserMedia() };
+    Module["createContext"] = function Module_createContext(canvas, useWebGL, setInModule, webGLContextAttributes) { return Browser.createContext(canvas, useWebGL, setInModule, webGLContextAttributes) };
+#if MAIN_MODULE
+    var preloadedWasm = {};
+#endif
+    var preloadedImages = {};
+    var preloadedAudios = {};`,
+
   $Browser: {
     mainLoop: {
       running: false,
@@ -106,12 +111,12 @@ var LibraryBrowser = {
         Browser.hasBlobConstructor = true;
       } catch(e) {
         Browser.hasBlobConstructor = false;
-        out("warning: no blob constructor, cannot create blobs with mimetypes");
+        err("warning: no blob constructor, cannot create blobs with mimetypes");
       }
-      Browser.BlobBuilder = typeof MozBlobBuilder != "undefined" ? MozBlobBuilder : (typeof WebKitBlobBuilder != "undefined" ? WebKitBlobBuilder : (!Browser.hasBlobConstructor ? out("warning: no BlobBuilder") : null));
+      Browser.BlobBuilder = typeof MozBlobBuilder != "undefined" ? MozBlobBuilder : (typeof WebKitBlobBuilder != "undefined" ? WebKitBlobBuilder : (!Browser.hasBlobConstructor ? err("warning: no BlobBuilder") : null));
       Browser.URLObject = typeof window != "undefined" ? (window.URL ? window.URL : window.webkitURL) : undefined;
-      if (!Module.noImageDecoding && typeof Browser.URLObject === 'undefined') {
-        out("warning: Browser does not support creating object URLs. Built-in browser image decoding will not be available.");
+      if (!Module.noImageDecoding && typeof Browser.URLObject == 'undefined') {
+        err("warning: Browser does not support creating object URLs. Built-in browser image decoding will not be available.");
         Module.noImageDecoding = true;
       }
 
@@ -150,18 +155,18 @@ var LibraryBrowser = {
         assert(typeof url == 'string', 'createObjectURL must return a url as a string');
 #endif
         var img = new Image();
-        img.onload = function img_onload() {
+        img.onload = () => {
           assert(img.complete, 'Image ' + name + ' could not be decoded');
-          var canvas = document.createElement('canvas');
+          var canvas = /** @type {!HTMLCanvasElement} */ (document.createElement('canvas'));
           canvas.width = img.width;
           canvas.height = img.height;
           var ctx = canvas.getContext('webgl2',{alpha:true,depth:false,antialias:false,imageSmoothingEnabled:false,preserveDrawingBuffer:false,premultipliedAlpha:false,desynchronized:false,lowLatency:true,powerPreference:'high-performance'});
           ctx.drawImage(img, 0, 0);
-          Module["preloadedImages"][name] = canvas;
+          preloadedImages[name] = canvas;
           Browser.URLObject.revokeObjectURL(url);
           if (onload) onload(byteArray);
         };
-        img.onerror = function img_onerror(event) {
+        img.onerror = (event) => {
           out('Image ' + url + ' could not be decoded');
           if (onerror) onerror();
         };
@@ -178,13 +183,13 @@ var LibraryBrowser = {
         function finish(audio) {
           if (done) return;
           done = true;
-          Module["preloadedAudios"][name] = audio;
+          preloadedAudios[name] = audio;
           if (onload) onload(byteArray);
         }
         function fail() {
           if (done) return;
           done = true;
-          Module["preloadedAudios"][name] = new Audio(); // empty shim
+          preloadedAudios[name] = new Audio(); // empty shim
           if (onerror) onerror();
         }
         if (Browser.hasBlobConstructor) {
@@ -198,10 +203,10 @@ var LibraryBrowser = {
           assert(typeof url == 'string', 'createObjectURL must return a url as a string');
 #endif
           var audio = new Audio();
-          audio.addEventListener('canplaythrough', function() { finish(audio) }, false); // use addEventListener due to chromium bug 124926
+          audio.addEventListener('canplaythrough', () => finish(audio), false); // use addEventListener due to chromium bug 124926
           audio.onerror = function audio_onerror(event) {
             if (done) return;
-            out('warning: browser could not fully decode audio ' + name + ', trying slower base64 approach');
+            err('warning: browser could not fully decode audio ' + name + ', trying slower base64 approach');
             function encode64(data) {
               var BASE = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
               var PAD = '=';
@@ -252,15 +257,13 @@ var LibraryBrowser = {
           // loadWebAssemblyModule can not load modules out-of-order, so rather
           // than just running the promises in parallel, this makes a chain of
           // promises to run in series.
-          this['asyncWasmLoadPromise'] = this['asyncWasmLoadPromise'].then(
-            function() {
-              return loadWebAssemblyModule(byteArray, {loadAsync: true, nodelete: true});
-            }).then(
-              function(module) {
-                Module['preloadedWasm'][name] = module;
+          wasmPlugin['asyncWasmLoadPromise'] = wasmPlugin['asyncWasmLoadPromise'].then(
+            () => loadWebAssemblyModule(byteArray, {loadAsync: true, nodelete: true})).then(
+              (module) => {
+                preloadedWasm[name] = module;
                 onload();
               },
-              function(err) {
+              (err) => {
                 console.warn("Couldn't instantiate wasm: " + name + " '" + err + "'");
                 onerror();
               });
@@ -286,12 +289,12 @@ var LibraryBrowser = {
                                     canvas['mozRequestPointerLock'] ||
                                     canvas['webkitRequestPointerLock'] ||
                                     canvas['msRequestPointerLock'] ||
-                                    function(){};
+                                    (() => {});
         canvas.exitPointerLock = document['exitPointerLock'] ||
                                  document['mozExitPointerLock'] ||
                                  document['webkitExitPointerLock'] ||
                                  document['msExitPointerLock'] ||
-                                 function(){}; // no-op if function does not exist
+                                 (() => {}); // no-op if function does not exist
         canvas.exitPointerLock = canvas.exitPointerLock.bind(document);
 
         document.addEventListener('pointerlockchange', pointerLockChange, false);
@@ -300,7 +303,7 @@ var LibraryBrowser = {
         document.addEventListener('mspointerlockchange', pointerLockChange, false);
 
         if (Module['elementPointerLock']) {
-          canvas.addEventListener("click", function(ev) {
+          canvas.addEventListener("click", (ev) => {
             if (!Browser.pointerLock && Module['canvas'].requestPointerLock) {
               Module['canvas'].requestPointerLock();
               ev.preventDefault();
@@ -310,7 +313,24 @@ var LibraryBrowser = {
       }
     },
 
-    createContext: function(canvas, useWebGL, setInModule, webGLContextAttributes) {
+    // Tries to handle an input byteArray using preload plugins. Returns true if
+    // it was handled.
+    handledByPreloadPlugin: function(byteArray, fullname, finish, onerror) {
+      // Ensure plugins are ready.
+      Browser.init();
+
+      var handled = false;
+      Module['preloadPlugins'].forEach(function(plugin) {
+        if (handled) return;
+        if (plugin['canHandle'](fullname)) {
+          plugin['handle'](byteArray, fullname, finish, onerror);
+          handled = true;
+        }
+      });
+      return handled;
+    },
+
+    createContext: function(/** @type {HTMLCanvasElement} */ canvas, useWebGL, setInModule, webGLContextAttributes) {
       if (useWebGL && Module.ctx && canvas == Module.canvas) return Module.ctx; // no need to recreate GL context if it's already been created for this canvas.
 
       var ctx;
@@ -330,12 +350,10 @@ var LibraryBrowser = {
 
 #if MIN_WEBGL_VERSION >= 2
           majorVersion: 2,
-#else
-#if MAX_WEBGL_VERSION >= 2 // library_browser.js defaults: use the WebGL version chosen at compile time (unless overridden below)
-          majorVersion: (typeof WebGL2RenderingContext !== 'undefined') ? 2 : 1,
+#elif MAX_WEBGL_VERSION >= 2 // library_browser.js defaults: use the WebGL version chosen at compile time (unless overridden below)
+          majorVersion: (typeof WebGL2RenderingContext != 'undefined') ? 2 : 1,
 #else
           majorVersion: 1,
-#endif
 #endif
         };
 
@@ -348,7 +366,7 @@ var LibraryBrowser = {
         // This check of existence of GL is here to satisfy Closure compiler, which yells if variable GL is referenced below but GL object is not
         // actually compiled in because application is not doing any GL operations. TODO: Ideally if GL is not being used, this function
         // Browser.createContext() should not even be emitted.
-        if (typeof GL !== 'undefined') {
+        if (typeof GL != 'undefined') {
           contextHandle = GL.createContext(canvas, contextAttributes);
           if (contextHandle) {
             ctx = GL.getContext(contextHandle).GLctx;
@@ -361,7 +379,7 @@ var LibraryBrowser = {
       if (!ctx) return null;
 
       if (setInModule) {
-        if (!useWebGL) assert(typeof GLctx === 'undefined', 'cannot set in module if GLctx is used, but we are a non-GL context that would replace it');
+        if (!useWebGL) assert(typeof GLctx == 'undefined', 'cannot set in module if GLctx is used, but we are a non-GL context that would replace it');
 
         Module.ctx = ctx;
         if (useWebGL) GL.makeContextCurrent(contextHandle);
@@ -380,8 +398,8 @@ var LibraryBrowser = {
     requestFullscreen: function(lockPointer, resizeCanvas) {
       Browser.lockPointer = lockPointer;
       Browser.resizeCanvas = resizeCanvas;
-      if (typeof Browser.lockPointer === 'undefined') Browser.lockPointer = true;
-      if (typeof Browser.resizeCanvas === 'undefined') Browser.resizeCanvas = false;
+      if (typeof Browser.lockPointer == 'undefined') Browser.lockPointer = true;
+      if (typeof Browser.resizeCanvas == 'undefined') Browser.resizeCanvas = false;
 
       var canvas = Module['canvas'];
       function fullscreenChange() {
@@ -430,8 +448,8 @@ var LibraryBrowser = {
       canvasContainer.requestFullscreen = canvasContainer['requestFullscreen'] ||
                                           canvasContainer['mozRequestFullScreen'] ||
                                           canvasContainer['msRequestFullscreen'] ||
-                                         (canvasContainer['webkitRequestFullscreen'] ? function() { canvasContainer['webkitRequestFullscreen'](Element['ALLOW_KEYBOARD_INPUT']) } : null) ||
-                                         (canvasContainer['webkitRequestFullScreen'] ? function() { canvasContainer['webkitRequestFullScreen'](Element['ALLOW_KEYBOARD_INPUT']) } : null);
+                                         (canvasContainer['webkitRequestFullscreen'] ? () => canvasContainer['webkitRequestFullscreen'](Element['ALLOW_KEYBOARD_INPUT']) : null) ||
+                                         (canvasContainer['webkitRequestFullScreen'] ? () => canvasContainer['webkitRequestFullScreen'](Element['ALLOW_KEYBOARD_INPUT']) : null);
 
       canvasContainer.requestFullscreen();
     },
@@ -477,13 +495,13 @@ var LibraryBrowser = {
     },
 
     requestAnimationFrame: function(func) {
-      if (typeof requestAnimationFrame === 'function') {
+      if (typeof requestAnimationFrame == 'function') {
         requestAnimationFrame(func);
         return;
       }
       var RAF = Browser.fakeRequestAnimationFrame;
 #if LEGACY_VM_SUPPORT
-      if (typeof window !== 'undefined') {
+      if (typeof window != 'undefined') {
         RAF = window['requestAnimationFrame'] ||
               window['mozRequestAnimationFrame'] ||
               window['webkitRequestAnimationFrame'] ||
@@ -497,10 +515,11 @@ var LibraryBrowser = {
 
     // abort and pause-aware versions TODO: build main loop on top of this?
 
-    safeSetTimeout: function(func) {
+    safeSetTimeout: function(func, timeout) {
       // Legacy function, this is used by the SDL2 port so we need to keep it
       // around at least until that is updated.
-      return safeSetTimeout(func);
+      // See https://github.com/libsdl-org/SDL/pull/6304
+      return safeSetTimeout(func, timeout);
     },
     safeRequestAnimationFrame: function(func) {
       {{{ runtimeKeepalivePush() }}}
@@ -630,12 +649,12 @@ var LibraryBrowser = {
         // Neither .scrollX or .pageXOffset are defined in a spec, but
         // we prefer .scrollX because it is currently in a spec draft.
         // (see: http://www.w3.org/TR/2013/WD-cssom-view-20131217/)
-        var scrollX = ((typeof window.scrollX !== 'undefined') ? window.scrollX : window.pageXOffset);
-        var scrollY = ((typeof window.scrollY !== 'undefined') ? window.scrollY : window.pageYOffset);
+        var scrollX = ((typeof window.scrollX != 'undefined') ? window.scrollX : window.pageXOffset);
+        var scrollY = ((typeof window.scrollY != 'undefined') ? window.scrollY : window.pageYOffset);
 #if ASSERTIONS
         // If this assert lands, it's likely because the browser doesn't support scrollX or pageXOffset
         // and we have no viable fallback.
-        assert((typeof scrollX !== 'undefined') && (typeof scrollY !== 'undefined'), 'Unable to retrieve scroll position, mouse positions likely broken.');
+        assert((typeof scrollX != 'undefined') && (typeof scrollY != 'undefined'), 'Unable to retrieve scroll position, mouse positions likely broken.');
 #endif
 
         if (event.type === 'touchstart' || event.type === 'touchend' || event.type === 'touchmove') {
@@ -700,9 +719,9 @@ var LibraryBrowser = {
     setFullscreenCanvasSize: function() {
       // check if SDL is available
       if (typeof SDL != "undefined") {
-        var flags = {{{ makeGetValue('SDL.screen', '0', 'i32', 0, 1) }}};
+        var flags = {{{ makeGetValue('SDL.screen', '0', 'u32') }}};
         flags = flags | 0x00800000; // set SDL_FULLSCREEN flag
-        {{{ makeSetValue('SDL.screen', '0', 'flags', 'i32') }}}
+        {{{ makeSetValue('SDL.screen', '0', 'flags', 'i32') }}};
       }
       Browser.updateCanvasDimensions(Module['canvas']);
       Browser.updateResizeListeners();
@@ -711,9 +730,9 @@ var LibraryBrowser = {
     setWindowedCanvasSize: function() {
       // check if SDL is available
       if (typeof SDL != "undefined") {
-        var flags = {{{ makeGetValue('SDL.screen', '0', 'i32', 0, 1) }}};
+        var flags = {{{ makeGetValue('SDL.screen', '0', 'u32') }}};
         flags = flags & ~0x00800000; // clear SDL_FULLSCREEN flag
-        {{{ makeSetValue('SDL.screen', '0', 'flags', 'i32') }}}
+        {{{ makeSetValue('SDL.screen', '0', 'flags', 'i32') }}};
       }
       Browser.updateCanvasDimensions(Module['canvas']);
       Browser.updateResizeListeners();
@@ -766,41 +785,7 @@ var LibraryBrowser = {
     },
   },
 
-  $funcWrappers: {},
-
-  $getFuncWrapper__deps: ['$funcWrappers', '$dynCall'],
-  $getFuncWrapper: function(func, sig) {
-    if (!func) return; // on null pointer, return undefined
-    assert(sig);
-    if (!funcWrappers[sig]) {
-      funcWrappers[sig] = {};
-    }
-    var sigCache = funcWrappers[sig];
-    if (!sigCache[func]) {
-      // optimize away arguments usage in common cases
-      if (sig.length === 1) {
-        sigCache[func] = function dynCall_wrapper() {
-          return dynCall(sig, func);
-        };
-      } else if (sig.length === 2) {
-        sigCache[func] = function dynCall_wrapper(arg) {
-          return dynCall(sig, func, [arg]);
-        };
-      } else {
-        // general case
-        sigCache[func] = function dynCall_wrapper() {
-          return dynCall(sig, func, Array.prototype.slice.call(arguments));
-        };
-      }
-    }
-    return sigCache[func];
-  },
-
-  emscripten_run_preload_plugins__deps: ['$PATH',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
+  emscripten_run_preload_plugins__deps: ['$PATH'],
   emscripten_run_preload_plugins__proxy: 'sync',
   emscripten_run_preload_plugins__sig: 'iiii',
   emscripten_run_preload_plugins: function(file, onload, onerror) {
@@ -813,11 +798,11 @@ var LibraryBrowser = {
       PATH.dirname(_file),
       PATH.basename(_file),
       new Uint8Array(data.object.contents), true, true,
-      function() {
+      () => {
         {{{ runtimeKeepalivePop() }}}
         if (onload) {{{ makeDynCall('vi', 'onload') }}}(file);
       },
-      function() {
+      () => {
         {{{ runtimeKeepalivePop() }}}
         if (onerror) {{{ makeDynCall('vi', 'onerror') }}}(file);
       },
@@ -826,9 +811,6 @@ var LibraryBrowser = {
     return 0;
   },
 
-#if !MINIMAL_RUNTIME
-  emscripten_run_preload_plugins_data__deps: ['$runtimeKeepalivePush', '$runtimeKeepalivePop'],
-#endif
   emscripten_run_preload_plugins_data__proxy: 'sync',
   emscripten_run_preload_plugins_data__sig: 'viiiiii',
   emscripten_run_preload_plugins_data: function(data, size, suffix, arg, onload, onerror) {
@@ -845,11 +827,11 @@ var LibraryBrowser = {
       name,
       {{{ makeHEAPView('U8', 'data', 'data + size') }}},
       true, true,
-      function() {
+      () => {
         {{{ runtimeKeepalivePop() }}}
         if (onload) {{{ makeDynCall('vii', 'onload') }}}(arg, cname);
       },
-      function() {
+      () => {
         {{{ runtimeKeepalivePop() }}}
         if (onerror) {{{ makeDynCall('vi', 'onerror') }}}(arg);
       },
@@ -891,7 +873,7 @@ var LibraryBrowser = {
         }
       }
     };
-    script.onerror = function() {
+    script.onerror = () => {
       {{{ runtimeKeepalivePop() }}}
       if (onerror) onerror();
     };
@@ -935,18 +917,19 @@ var LibraryBrowser = {
       };
       Browser.mainLoop.method = 'rAF';
     } else if (mode == 2 /*EM_TIMING_SETIMMEDIATE*/) {
-      if (typeof setImmediate === 'undefined') {
+      if (typeof setImmediate == 'undefined') {
         // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
         var setImmediates = [];
         var emscriptenMainLoopMessageId = 'setimmediate';
-        var Browser_setImmediate_messageHandler = function(event) {
+        /** @param {Event} event */
+        var Browser_setImmediate_messageHandler = (event) => {
           // When called in current thread or Worker, the main loop ID is structured slightly different to accommodate for --proxy-to-worker runtime listening to Worker events,
           // so check for both cases.
           if (event.data === emscriptenMainLoopMessageId || event.data.target === emscriptenMainLoopMessageId) {
             event.stopPropagation();
             setImmediates.shift()();
           }
-        }
+        };
         addEventListener("message", Browser_setImmediate_messageHandler, true);
         setImmediate = /** @type{function(function(): ?, ...?): number} */(function Browser_emulated_setImmediate(func) {
           setImmediates.push(func);
@@ -966,6 +949,7 @@ var LibraryBrowser = {
   },
 
   emscripten_set_main_loop__deps: ['$setMainLoop'],
+  emscripten_set_main_loop__sig: 'viii',
   emscripten_set_main_loop: function(func, fps, simulateInfiniteLoop) {
     var browserIterationFunc = {{{ makeDynCall('v', 'func') }}};
     setMainLoop(browserIterationFunc, fps, simulateInfiniteLoop);
@@ -978,10 +962,14 @@ var LibraryBrowser = {
     'emscripten_webgl_commit_frame',
 #endif
 #if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush',
     '$maybeExit',
 #endif
   ],
+  $setMainLoop__docs: `
+  /**
+   * @param {number=} arg
+   * @param {boolean=} noSetTiming
+   */`,
   $setMainLoop: function(browserIterationFunc, fps, simulateInfiniteLoop, arg, noSetTiming) {
     assert(!Browser.mainLoop.func, 'emscripten_set_main_loop: there can only be one main loop function at once: call emscripten_cancel_main_loop to cancel the previous one before setting a new one with different parameters.');
 
@@ -1005,7 +993,7 @@ var LibraryBrowser = {
     function checkIsRunning() {
       if (thisMainLoopId < Browser.mainLoop.currentlyRunningMainloop) {
 #if RUNTIME_DEBUG
-        err('main loop exiting..');
+        dbg('main loop exiting..');
 #endif
         {{{ runtimeKeepalivePop() }}}
 #if !MINIMAL_RUNTIME
@@ -1071,7 +1059,7 @@ var LibraryBrowser = {
 #if USE_PTHREADS && OFFSCREEN_FRAMEBUFFER && GL_SUPPORT_EXPLICIT_SWAP_CONTROL
       // If the current GL context is a proxied regular WebGL context, and was initialized with implicit swap mode on the main thread, and we are on the parent thread,
       // perform the swap on behalf of the user.
-      if (typeof GL !== 'undefined' && GL.currentContext && GL.currentContextIsProxied) {
+      if (typeof GL != 'undefined' && GL.currentContext && GL.currentContextIsProxied) {
         var explicitSwapControl = {{{ makeGetValue('GL.currentContext', 0, 'i32') }}};
         if (!explicitSwapControl) _emscripten_webgl_commit_frame();
       }
@@ -1079,7 +1067,7 @@ var LibraryBrowser = {
 
 #if OFFSCREENCANVAS_SUPPORT
       // If the current GL context is an OffscreenCanvas, but it was initialized with implicit swap mode, perform the swap on behalf of the user.
-      if (typeof GL !== 'undefined' && GL.currentContext && !GL.currentContextIsProxied && !GL.currentContext.attributes.explicitSwapControl && GL.currentContext.GLctx.commit) {
+      if (typeof GL != 'undefined' && GL.currentContext && !GL.currentContextIsProxied && !GL.currentContext.attributes.explicitSwapControl && GL.currentContext.GLctx.commit) {
         GL.currentContext.GLctx.commit();
       }
 #endif
@@ -1104,7 +1092,7 @@ var LibraryBrowser = {
       // to queue the newest produced audio samples.
       // TODO: Consider adding pre- and post- rAF callbacks so that GL.newRenderingFrameStarted() and SDL.audio.queueNewAudioData()
       //       do not need to be hardcoded into this function, but can be more generic.
-      if (typeof SDL === 'object' && SDL.audio && SDL.audio.queueNewAudioData) SDL.audio.queueNewAudioData();
+      if (typeof SDL == 'object' && SDL.audio && SDL.audio.queueNewAudioData) SDL.audio.queueNewAudioData();
 
       Browser.mainLoop.scheduler();
     }
@@ -1125,7 +1113,7 @@ var LibraryBrowser = {
   emscripten_set_main_loop_arg__deps: ['$setMainLoop'],
   emscripten_set_main_loop_arg__sig: 'viiii',
   emscripten_set_main_loop_arg: function(func, arg, fps, simulateInfiniteLoop) {
-    var browserIterationFunc = function() { {{{ makeDynCall('vi', 'func') }}}(arg); };
+    var browserIterationFunc = () => {{{ makeDynCall('vi', 'func') }}}(arg);
     setMainLoop(browserIterationFunc, fps, simulateInfiniteLoop, arg);
   },
 
@@ -1173,11 +1161,11 @@ var LibraryBrowser = {
   },
 
   // Runs natively in pthread, no __proxy needed.
-  emscripten_async_call__sig: 'viii',
+  emscripten_async_call__sig: 'vppi',
   emscripten_async_call__deps: ['$safeSetTimeout'],
   emscripten_async_call: function(func, arg, millis) {
     function wrapper() {
-      {{{ makeDynCall('vi', 'func') }}}(arg);
+      {{{ makeDynCall('vp', 'func') }}}(arg);
     }
 
     if (millis >= 0
@@ -1201,10 +1189,7 @@ var LibraryBrowser = {
       _emscripten_get_window_title.buffer = _malloc(buflen);
     }
 
-    writeAsciiToMemory(
-      document.title.slice(0, buflen - 1),
-      _emscripten_get_window_title.buffer
-    );
+    stringToUTF8(document.title, _emscripten_get_window_title.buffer, buflen);
 
     return _emscripten_get_window_title.buffer;
   },
@@ -1212,7 +1197,7 @@ var LibraryBrowser = {
   emscripten_set_window_title__proxy: 'sync',
   emscripten_set_window_title__sig: 'vi',
   emscripten_set_window_title: function(title) {
-    setWindowTitle(AsciiToString(title));
+    setWindowTitle(UTF8ToString(title));
   },
 
   emscripten_get_screen_size__proxy: 'sync',
@@ -1306,9 +1291,6 @@ var LibraryBrowser = {
 
   emscripten_call_worker__proxy: 'sync',
   emscripten_call_worker__sig: 'viiiiii',
-#if !MINIMAL_RUNTIME
-  emscripten_call_worker__deps: ['$runtimeKeepalivePush'],
-#endif
   emscripten_call_worker: function(id, funcName, data, size, callback, arg) {
     funcName = UTF8ToString(funcName);
     var info = Browser.workers[id];
@@ -1389,7 +1371,7 @@ var LibraryBrowser = {
 
     path = PATH_FS.resolve(path);
 
-    var canvas = Module["preloadedImages"][path];
+    var canvas = /** @type {HTMLCanvasElement} */(preloadedImages[path]);
     if (canvas) {
       var ctx = canvas.getContext("2d");
       var image = ctx.getImageData(0, 0, canvas.width, canvas.height);

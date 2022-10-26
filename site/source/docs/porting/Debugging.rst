@@ -42,11 +42,11 @@ The ``EMCC_DEBUG`` environment variable can be set to enable Emscripten's debug 
 .. code-block:: bash
 
   # Linux or macOS
-  EMCC_DEBUG=1 emcc tests/hello_world.cpp -o hello.html
+  EMCC_DEBUG=1 emcc test/hello_world.cpp -o hello.html
 
   # Windows
   set EMCC_DEBUG=1
-  emcc tests/hello_world.cpp -o hello.html
+  emcc test/hello_world.cpp -o hello.html
   set EMCC_DEBUG=0
 
 With ``EMCC_DEBUG=1`` set, :ref:`emcc <emccdoc>` emits debug output and generates intermediate files for the compiler's various stages. ``EMCC_DEBUG=2`` additionally generates intermediate files for each JavaScript optimizer pass.
@@ -65,11 +65,11 @@ The debug logs can be analysed to profile and review the changes that were made 
 Compiler settings
 ==================
 
-Emscripten has a number of compiler settings that can be useful for debugging. These are set using the :ref:`emcc -s <emcc-s-option-value>` option, and will override any optimization flags. For example:
+Emscripten has a number of compiler settings that can be useful for debugging. These are set using the :ref:`emcc -s<emcc-s-option-value>` option, and will override any optimization flags. For example:
 
 .. code-block:: bash
 
-  emcc -O1 -s ASSERTIONS=1 tests/hello_world
+  emcc -O1 -sASSERTIONS test/hello_world
 
 Some important settings are:
 
@@ -158,7 +158,7 @@ returns the ``what`` function call result.
 
 .. code-block:: cpp
 
-  #include <bind.h>
+  #include <emscripten/bind.h>
 
   std::string getExceptionMessage(intptr_t exceptionPtr) {
     return std::string(reinterpret_cast<std::exception *>(exceptionPtr)->what());
@@ -168,6 +168,7 @@ returns the ``what`` function call result.
     emscripten::function("getExceptionMessage", &getExceptionMessage);
   };
 
+This requires using the linker flag ``--bind``.
 Once such a function has been created, exception handling code in javascript
 can call it when receiving an exception from WASM. Here the function is used
 in order to log the thrown exception.
@@ -233,7 +234,7 @@ There are several possible causes:
 In order to debug these sorts of issues:
 
 - Compile with ``-Werror``. This turns warnings into errors, which can be useful as some cases of undefined behavior would otherwise show warnings.
-- Use ``-s ASSERTIONS=2`` to get some useful information about the function pointer being called, and its type.
+- Use ``-sASSERTIONS=2`` to get some useful information about the function pointer being called, and its type.
 - Look at the browser stack trace to see where the error occurs and which function should have been called.
 - Build with :ref:`SAFE_HEAP=1 <debugging-SAFE-HEAP>`.
 - :ref:`Sanitizers` can help here, in particular UBSan.
@@ -286,7 +287,7 @@ it, you can do something like
 
 .. code-block:: bash
 
-  emcc tests/hello_world.c --memoryprofiler -o page.html
+  emcc test/hello_world.c --memoryprofiler -o page.html
 
 Note that you need to emit HTML as in that example, as the memory profiler
 output is rendered onto the page. To view it, load ``page.html`` in your
@@ -318,11 +319,11 @@ To run the *AutoDebugger*, compile with the environment variable ``EMCC_AUTODEBU
 .. code-block:: bash
 
   # Linux or macOS
-  EMCC_AUTODEBUG=1 emcc tests/hello_world.cpp -o hello.html
+  EMCC_AUTODEBUG=1 emcc test/hello_world.cpp -o hello.html
 
   # Windows
   set EMCC_AUTODEBUG=1
-  emcc tests/hello_world.cpp -o hello.html
+  emcc test/hello_world.cpp -o hello.html
   set EMCC_AUTODEBUG=0
 
 
@@ -341,7 +342,7 @@ Use the following workflow to find regressions with the *AutoDebugger*:
 Any difference between the outputs is likely to be caused by the bug.
 
 .. note::
-    You may want to use ``-s DETERMINISTIC`` which will ensure that timing
+    You may want to use ``-sDETERMINISTIC`` which will ensure that timing
     and other issues don't cause false positives.
 
 
@@ -349,7 +350,7 @@ Useful Links
 ============
 
 - `Blogpost about reading compiler output <http://mozakai.blogspot.com/2014/06/looking-through-emscripten-output.html>`_.
-- `GDC 2014: Getting started with asm.js and Emscripten <http://people.mozilla.org/~lwagner/gdc-pres/gdc-2014.html#/20>`_ (Debugging slides).
+- `GDC 2014: Getting started with asm.js and Emscripten <https://web.archive.org/web/20140325222509/http://people.mozilla.org/~lwagner/gdc-pres/gdc-2014.html#/20>`_ (Debugging slides).
 
 Need help?
 ==========

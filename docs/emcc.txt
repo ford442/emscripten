@@ -27,7 +27,7 @@ Most clang options will work, as will gcc options, for example:
    # Display this information
    emcc --help
 
-   Display compiler version information
+   # Display compiler version information
    emcc --version
 
 To see the full list of *Clang* options supported on the version of
@@ -63,7 +63,7 @@ Options that are modified or new in *emcc* are listed below:
      parts of the runtime may be stripped if they are not exported on
      the "Module" object. The compiler is aware of code in --pre-js
      and --post-js, so you can safely use the runtime from there.
-     Alternatively, you can use "EXTRA_EXPORTED_RUNTIME_METHODS", see
+     Alternatively, you can use "EXPORTED_RUNTIME_METHODS", see
      src/settings.js.
 
 "-O3"
@@ -87,16 +87,10 @@ Options that are modified or new in *emcc* are listed below:
 
      For more tips on optimizing your code, see Optimizing Code.
 
-"-s OPTION[=VALUE]"
+"-sOPTION[=VALUE]"
    [different OPTIONs affect at different stages, most at link time]
    Emscripten build options. For the available options, see
    src/settings.js.
-
-   Note:
-
-     You can prefix boolean options with "NO_" to reverse them. For
-     example, "-s EXIT_RUNTIME=1" is the same as "-s
-     NO_EXIT_RUNTIME=0".
 
    Note:
 
@@ -104,14 +98,27 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     Lists can be specified without or without quotes around each
-     element and with or without brackets around the list.  For
-     example all the following are equivelent:
+     It is possible, with boolean options, to use the "NO_" prefix to
+     reverse their meaning. For example, "-sEXIT_RUNTIME=0" is the
+     same as "-sNO_EXIT_RUNTIME=1" and vice versa.  This is not
+     recommended in most cases.
 
-        -s EXPORTED_FUNCTIONS=foo,bar
-        -s EXPORTED_FUNCTIONS="foo","bar"
-        -s EXPORTED_FUNCTIONS=["foo","bar"]
-        -s EXPORTED_FUNCTIONS=[foo,bar]
+   Note:
+
+     Lists can be specified as comma separated strings:
+
+        -sEXPORTED_FUNCTIONS=foo,bar
+
+   Note:
+
+     We also support older list formats that involve more quoting.
+     Lists can be specified with or without quotes around each element
+     and with or without brackets around the list.  For example, all
+     the following are equivalent:
+
+        -sEXPORTED_FUNCTIONS="foo","bar"
+        -sEXPORTED_FUNCTIONS=["foo","bar"]
+        -sEXPORTED_FUNCTIONS=[foo,bar]
 
    Note:
 
@@ -119,14 +126,14 @@ Options that are modified or new in *emcc* are listed below:
      marks (") around the list in most shells (to avoid errors being
      raised). Two examples are shown below:
 
-        -s EXPORTED_FUNCTIONS="['liblib.so']"
-        -s "EXPORTED_FUNCTIONS=['liblib.so']"
+        -sEXPORTED_FUNCTIONS="['liblib.so']"
+        -s"EXPORTED_FUNCTIONS=['liblib.so']"
 
    You can also specify that the value of an option will be read from
    a file. For example, the following will set "EXPORTED_FUNCTIONS"
    based on the contents of the file at **path/to/file**.
 
-      -s EXPORTED_FUNCTIONS=@/path/to/file
+      -sEXPORTED_FUNCTIONS=@/path/to/file
 
    Note:
 
@@ -138,8 +145,9 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     Options can be specified as a single argument without a space
-     between the "-s" and option name.  e.g. "-sFOO=1".
+     Options can be specified as a single argument with or without a
+     space between the "-s" and option name.  e.g. "-sFOO" or "-s
+     FOO".
 
 "-g"
    [compile+link] Preserve debug information.
@@ -157,7 +165,7 @@ Options that are modified or new in *emcc* are listed below:
    "FILENAME" if provided, otherwise the same as the wasm file but
    with suffix ".debug.wasm". While the main file contains no debug
    info, it does contain a URL to where the debug file is, so that
-   devtools can find it. You can use "-s SEPARATE_DWARF_URL=URL" to
+   devtools can find it. You can use "-sSEPARATE_DWARF_URL=URL" to
    customize that location (this is useful if you want to host it on a
    different server, for example).
 
@@ -205,7 +213,7 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     When used with "-s WASM=2", two symbol files are created.
+     When used with "-sWASM=2", two symbol files are created.
      "[name].js.symbols" (with WASM symbols) and
      "[name].wasm.js.symbols" (with ASM.js symbols)
 
@@ -229,7 +237,7 @@ Options that are modified or new in *emcc* are listed below:
 
    Note:
 
-     * Consider using "-s MODULARIZE=1" when using closure, as it
+     * Consider using "-sMODULARIZE" when using closure, as it
        minifies globals to names that might conflict with others in
        the global scope. "MODULARIZE" puts all the output into a
        function (see "src/settings.js").
@@ -246,6 +254,16 @@ Options that are modified or new in *emcc* are listed below:
 
      * Closure is only run if JavaScript opts are being done ("-O2" or
        above).
+
+"--closure-args=<args>"
+   [link] Pass arguments to the *Closure compiler*. This is an
+   alternative to "EMCC_CLOSURE_ARGS".
+
+   For example, one might want to pass an externs file to avoid
+   minifying JS functions defined in "--pre-js" or "--post-js" files.
+   To pass to Closure the "externs.js" file containing those public
+   APIs that should not be minified, one would add the flag: "--
+   closure-args=--externs=path/to/externs.js"
 
 "--pre-js <file>"
    [link] Specify a file whose contents are added before the emitted
@@ -372,8 +390,8 @@ Options that are modified or new in *emcc* are listed below:
    script to be run.
 
 "--bind"
-   [link] Compiles the source code using the Embind bindings to
-   connect C/C++ and JavaScript.
+   [link] Links against embind library.  Deprecated: Use "-lembind"
+   instead.
 
 "--ignore-dynamic-linking"
    [link] Tells the compiler to ignore dynamic linking (the user will
@@ -520,7 +538,7 @@ Options that are modified or new in *emcc* are listed below:
 "--threadprofiler"
    [link] Embeds a thread activity profiler onto the generated page.
    Use this to profile the application usage of pthreads when
-   targeting multithreaded builds (-s USE_PTHREADS=1/2).
+   targeting multithreaded builds (-sUSE_PTHREADS=1/2).
 
 "--em-config <path>"
    [general] Specifies the location of the **.emscripten**
@@ -530,14 +548,11 @@ Options that are modified or new in *emcc* are listed below:
    using the "EM_CONFIG" environment variable.
 
 "--default-obj-ext <.ext>"
-   [compile+link] Specifies the file suffix to generate if the
-   location of a directory name is passed to the "-o" directive.
-
-   For example, consider the following command, which will by default
-   generate an output name **dir/a.o**. With "--default-obj-ext .ext"
-   the generated file has the custom suffix *dir/a.ext*.
-
-      emcc -c a.c -o dir/
+   [compile] Specifies the output suffix to use when compiling with
+   "-c" in the absence of "-o".  For example, when compiling multiple
+   sources files with "emcc -c *.c" the compiler will normally output
+   files with the ".o" extension, but "--default-obj-ext .obj" can be
+   used to instead generate files with the *.obj* extension.
 
 "--valid-abspath <path>"
    [compile+link] Note an allowed absolute path, which we should not
@@ -592,10 +607,6 @@ Environment variables
 =====================
 
 *emcc* is affected by several environment variables, as listed below:
-
-   * "EMMAKEN_CFLAGS" [compile+link]
-
-   * "EMMAKEN_COMPILER" [compile+link] Deprecated. Avoid using.
 
    * "EMMAKEN_JUST_CONFIGURE" [other]
 

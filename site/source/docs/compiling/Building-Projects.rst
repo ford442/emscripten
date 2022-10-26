@@ -87,13 +87,13 @@ which files are produced under which conditions:
 
 - ``emcc ... -o output.html`` builds a ``output.html`` file as an output, as well as an accompanying ``output.js`` launcher file, and a ``output.wasm`` WebAssembly file.
 - ``emcc ... -o output.js`` omits generating a HTML launcher file (expecting you to provide it yourself if you plan to run in browser), and produces two files, ``output.js`` and ``output.wasm``. (that can be run in e.g. node.js shell)
-- ``emcc ... -o output.wasm`` omits generating either JavaScript or HTML launcher file, and produces a single Wasm file built in standalone mode as if the ``-s STANDALONE_WASM`` settting had been used.
-- ``emcc ... -o output.{html,js} -s WASM=0`` causes the compiler to target JavaScript, and therefore a ``.wasm`` file is not produced.
-- ``emcc ... -o output.{html,js} --emit-symbol-map`` produces a file ``output.{html,js}.symbols`` if WebAssembly is being targeted (``-s WASM=0`` not specified), or if JavaScript is being targeted and ``-Os``, ``-Oz`` or ``-O2`` or higher is specified, but debug level setting is ``-g1`` or lower (i.e. if symbols minification did occur).
-- ``emcc ... -o output.{html,js} -s WASM=0 --memory-init-file 1`` causes the generation of ``output.{html,js}.mem`` memory initializer file. Pasing ``-O2``, ``-Os`` or ``-Oz`` also implies ``--memory-init-file 1``.
-- ``emcc ... -o output.{html,js} -gsource-map`` generates a source map file ``output.wasm.map``. If targeting JavaScript with ``-s WASM=0``, the filename is ``output.{html,js}.map``.
+- ``emcc ... -o output.wasm`` omits generating either JavaScript or HTML launcher file, and produces a single Wasm file built in standalone mode as if the ``-sSTANDALONE_WASM`` settting had been used.
+- ``emcc ... -o output.{html,js} -sWASM=0`` causes the compiler to target JavaScript, and therefore a ``.wasm`` file is not produced.
+- ``emcc ... -o output.{html,js} --emit-symbol-map`` produces a file ``output.{html,js}.symbols`` if WebAssembly is being targeted (``-sWASM=0`` not specified), or if JavaScript is being targeted and ``-Os``, ``-Oz`` or ``-O2`` or higher is specified, but debug level setting is ``-g1`` or lower (i.e. if symbols minification did occur).
+- ``emcc ... -o output.{html,js} -sWASM=0 --memory-init-file 1`` causes the generation of ``output.{html,js}.mem`` memory initializer file. Pasing ``-O2``, ``-Os`` or ``-Oz`` also implies ``--memory-init-file 1``.
+- ``emcc ... -o output.{html,js} -gsource-map`` generates a source map file ``output.wasm.map``. If targeting JavaScript with ``-sWASM=0``, the filename is ``output.{html,js}.map``.
 - ``emcc ... -o output.{html,js} --preload-file xxx`` directive generates a preloaded MEMFS filesystem file ``output.data``.
-- ``emcc ... -o output.{html,js} -s WASM={0,1} -s SINGLE_FILE=1`` merges JavaScript and WebAssembly code in the single output file ``output.{html,js}`` (in base64) to produce only one file for deployment. (If paired with ``--preload-file``, the preloaded ``.data`` file still exists as a separate file)
+- ``emcc ... -o output.{html,js} -sWASM={0,1} -sSINGLE_FILE`` merges JavaScript and WebAssembly code in the single output file ``output.{html,js}`` (in base64) to produce only one file for deployment. (If paired with ``--preload-file``, the preloaded ``.data`` file still exists as a separate file)
 
 This list is not exhaustive, but illustrates most commonly used combinations.
 
@@ -189,7 +189,7 @@ Using libraries
 Built-in support is available for a number of standard libraries: *libc*, *libc++* and *SDL*. These will automatically be linked when you compile code that uses them (you do not even need to add ``-lSDL``, but see below for more SDL-specific details).
 
 If your project uses other libraries, for example
-`zlib <https://github.com/emscripten-core/emscripten/tree/main/tests/zlib>`_
+`zlib <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/zlib>`_
 or *glib*, you will need to build and link them. The normal approach is to build
 the libraries (to object files, or ``.a`` archives of them) and then link those
 with your main program to emit JavaScript+WebAssembly.
@@ -213,17 +213,17 @@ For example, consider the case where a project "project" uses a library "libstuf
 Emscripten Ports
 ================
 
-Emscripten Ports is a collection of useful libraries, ported to Emscripten. They reside `on github <https://github.com/emscripten-ports>`_, and have integration support in *emcc*. When you request that a port be used, emcc will fetch it from the remote server, set it up and build it locally, then link it with your project, add necessary include to your build commands, etc. For example, SDL2 is in ports, and you can request that it be used with ``-s USE_SDL=2``. For example,
+Emscripten Ports is a collection of useful libraries, ported to Emscripten. They reside `on github <https://github.com/emscripten-ports>`_, and have integration support in *emcc*. When you request that a port be used, emcc will fetch it from the remote server, set it up and build it locally, then link it with your project, add necessary include to your build commands, etc. For example, SDL2 is in ports, and you can request that it be used with ``-sUSE_SDL=2``. For example,
 
 .. code-block:: bash
 
-  emcc tests/sdl2glshader.c -s USE_SDL=2 -s LEGACY_GL_EMULATION=1 -o sdl2.html
+  emcc test/sdl2glshader.c -sUSE_SDL=2 -sLEGACY_GL_EMULATION -o sdl2.html
 
 You should see some notifications about SDL2 being used, and built if it wasn't previously. You can then view ``sdl2.html`` in your browser.
 
-.. note:: *SDL_image* has also been added to ports, use it with ``-s USE_SDL_IMAGE=2``. To see a list of all available ports, run ``emcc --show-ports``. For SDL2_image to be useful, you generally need to specify the image formats you are planning on using with e.g. ``-s SDL2_IMAGE_FORMATS='["bmp","png","xpm"]'`` (note: jpg support is not available yet as of Jun 22 2018 - libjpg needs to be added to emscripten-ports). This will also ensure that ``IMG_Init`` works properly when you specify those formats. Alternatively, you can use ``emcc --use-preload-plugins`` and ``--preload-file`` your images, so the browser codecs decode them (see :ref:`preloading-files`). A code path in the SDL2_image port will load through :c:func:`emscripten_get_preloaded_image_data`, but then your calls to ``IMG_Init`` with those image formats will fail (as while the images will work through preloading, IMG_Init reports no support for those formats, as it doesn't have support compiled in - in other words, IMG_Init does not report support for formats that only work through preloading).```
+.. note:: *SDL_image* has also been added to ports, use it with ``-sUSE_SDL_IMAGE=2``. To see a list of all available ports, run ``emcc --show-ports``. For SDL2_image to be useful, you generally need to specify the image formats you are planning on using with e.g. ``-sSDL2_IMAGE_FORMATS='["bmp","png","xpm"]'`` (note: jpg support is not available yet as of Jun 22 2018 - libjpg needs to be added to emscripten-ports). This will also ensure that ``IMG_Init`` works properly when you specify those formats. Alternatively, you can use ``emcc --use-preload-plugins`` and ``--preload-file`` your images, so the browser codecs decode them (see :ref:`preloading-files`). A code path in the SDL2_image port will load through :c:func:`emscripten_get_preloaded_image_data`, but then your calls to ``IMG_Init`` with those image formats will fail (as while the images will work through preloading, IMG_Init reports no support for those formats, as it doesn't have support compiled in - in other words, IMG_Init does not report support for formats that only work through preloading).```
 
-.. note:: *SDL_net* has also been added to ports, use it with ``-s USE_SDL_NET=2``. To see a list of all available ports, run ``emcc --show-ports``.
+.. note:: *SDL_net* has also been added to ports, use it with ``-sUSE_SDL_NET=2``. To see a list of all available ports, run ``emcc --show-ports``.
 
 .. note:: Emscripten also has support for older SDL1, which is built-in. If you do not specify SDL2 as in the command above, then SDL1 is linked in and the SDL1 include paths are used. SDL1 has support for *sdl-config*, which is present in `system/bin <https://github.com/emscripten-core/emscripten/blob/main/system/bin/sdl-config>`_. Using the native *sdl-config* may result in compilation or missing-symbol errors. You will need to modify the build system to look for files in **emscripten/system** or **emscripten/system/bin** in order to use the Emscripten *sdl-config*.
 
@@ -253,25 +253,31 @@ Build system self-execution
 
 Some large projects generate executables and run them in order to generate input for later parts of the build process (for example, a parser may be built and then run on a grammar, which then generates C/C++ code that implements that grammar). This sort of build process causes problems when using Emscripten because you cannot directly run the code you are generating.
 
-The simplest solution is usually to build the project twice: once natively, and once to JavaScript. When the JavaScript build procedure fails because a generated executable is not present, you can then copy that executable from the native build, and continue to build normally. This approach was successfully used for compiling Python (see `tests/python/readme.md <https://github.com/emscripten-core/emscripten/blob/main/tests/python/readme.md>`_ for more details).
+The simplest solution is usually to build the project twice: once natively, and once to JavaScript. When the JavaScript build procedure fails because a generated executable is not present, you can then copy that executable from the native build, and continue to build normally. For example, this approach has been successfully used for compiling Python (which needs to run its `pgen` executable during the build).
 
 In some cases it makes sense to modify the build scripts so that they build the generated executable natively. For example, this can be done by specifying two compilers in the build scripts, *emcc* and *gcc*, and using *gcc* just for generated executables. However, this can be more complicated than the previous solution because you need to modify the project build scripts, and you may have to work around cases where code is compiled and used both for the final result and for a generated executable.
 
 
-Dynamic linking
----------------
+Faux Dynamic Linking
+--------------------
 
-Emscripten's goal is to generate the fastest and smallest possible code, and for that reason it focuses on generating a single JavaScript file for an entire project. For that reason, dynamic linking should be avoided when possible.
+Emscripten's goal is to generate the fastest and smallest possible code. For
+that reason it focuses on compiling an entire project into a single Wasm file,
+avoiding dynamic linking when possible.
 
-By default, Emscripten ``.so`` files are the same as regular ``.o`` object files.
-Dynamic libraries that you specify in the final build stage (when generating
-JavaScript or HTML) are linked in as static libraries. *Emcc* ignores commands
-to dynamically link libraries during the compile stage (i.e., not in the
-final build stage). This is to ensure that the same dynamic library is not
-linked multiple times in intermediate build stages, which would result in
-duplicate symbol errors.
+By default, when the `-shared` flag is used to build a shared library,
+Emscripten will produce an ``.so`` library that is actually just a regular
+``.o`` object file (Under the hood it uses `ld -r` to combine objects into a
+single larger object).  When these faux "shared libraries" are linked into your
+application they are effectively linked as static libraries.  When building
+these shared libraries *Emcc* will ignore other shared libraries on the command
+line.  This is to ensure that the same dynamic library is not linked multiple
+times in intermediate build stages, which would result in duplicate symbol
+errors.
 
-There is `experimental support <https://github.com/emscripten-core/emscripten/wiki/Linking>`_ for true dynamic libraries, loaded as runtime, either via dlopen or as a shared library. See that link for the details and limitations.
+See :ref:`experimental support <Dynamic-Linking>` for how to build true dynamic
+libraries, which can be linked together either at load time, or at runtime (via
+dlopen).
 
 
 Configure may run checks that appear to fail
@@ -333,7 +339,9 @@ Detecting Emscripten in Preprocessor
 Emscripten provides the following preprocessor macros that can be used to identify the compiler version and platform:
 
  * The preprocessor define ``__EMSCRIPTEN__`` is always defined when compiling programs with Emscripten.
- * The preprocessor variables ``__EMSCRIPTEN_major__``, ``__EMSCRIPTEN_minor__`` and ``__EMSCRIPTEN_tiny__`` specify, as integers, the currently used Emscripten compiler version.
+ * The preprocessor variables ``__EMSCRIPTEN_major__``, ``__EMSCRIPTEN_minor__``
+   and ``__EMSCRIPTEN_tiny__`` are defined in ``emscripten/version.h`` and
+   specify, as integers, the currently used Emscripten compiler version.
  * Emscripten behaves like a variant of Unix, so the preprocessor defines ``unix``, ``__unix`` and ``__unix__`` are always present when compiling code with Emscripten.
  * Emscripten uses Clang/LLVM as its underlying codegen compiler, so the preprocessor defines ``__llvm__`` and ``__clang__`` are defined, and the preprocessor defines ``__clang_major__``, ``__clang_minor__`` and ``__clang_patchlevel__`` indicate the version of Clang that is used.
  * Clang/LLVM is GCC-compatible, so the preprocessor defines ``__GNUC__``, ``__GNUC_MINOR__`` and ``__GNUC_PATCHLEVEL__`` are also defined to represent the level of GCC compatibility that Clang/LLVM provides.
@@ -341,7 +349,7 @@ Emscripten provides the following preprocessor macros that can be used to identi
  * Likewise, ``__clang_version__`` is present and indicates both Emscripten and LLVM version information.
  * Emscripten is a 32-bit platform, so ``size_t`` is a 32-bit unsigned integer, ``__POINTER_WIDTH__=32``, ``__SIZEOF_LONG__=4`` and ``__LONG_MAX__`` equals ``2147483647L``.
  * When targeting SSEx SIMD APIs using one of the command line compiler flags ``-msse``, ``-msse2``, ``-msse3``, ``-mssse3``, or ``-msse4.1``, one or more of the preprocessor flags ``__SSE__``, ``__SSE2__``, ``__SSE3__``, ``__SSSE3__``, ``__SSE4_1__`` will be present to indicate available support for these instruction sets.
- * If targeting the pthreads multithreading support with the compiler & linker flag ``-s USE_PTHREADS=1``, the preprocessor define ``__EMSCRIPTEN_PTHREADS__`` will be present.
+ * If targeting the pthreads multithreading support with the compiler & linker flag ``-sUSE_PTHREADS``, the preprocessor define ``__EMSCRIPTEN_PTHREADS__`` will be present.
 
 
 Using a compiler wrapper
@@ -359,12 +367,21 @@ set via an environment variable.  e.g::
   EM_COMPILER_WRAPPER=gomacc emcc -c hello.c
 
 
+pkg-config
+==========
+
+*emconfigure* and *emmake* configure `pkg-config <https://www.freedesktop.org/wiki/Software/pkg-config/>`_
+for cross compiling and set the environment variable ``PKG_CONFIG_LIBDIR`` and
+``PKG_CONFIG_PATH``. To provide custom pkg-config paths, set the environment
+variable ``EM_PKG_CONFIG_PATH``.
+
+
 Examples / test code
 ====================
 
-The Emscripten test suite (`tests/runner.py <https://github.com/emscripten-core/emscripten/blob/main/tests/runner.py>`_) contains a number of good examples — large C/C++ projects that are built using their normal build systems as described above: `freetype <https://github.com/emscripten-core/emscripten/tree/main/tests/freetype>`_, `openjpeg <https://github.com/emscripten-core/emscripten/tree/main/tests/openjpeg>`_, `zlib <https://github.com/emscripten-core/emscripten/tree/main/tests/zlib>`_, `bullet <https://github.com/emscripten-core/emscripten/tree/main/tests/bullet>`_ and `poppler <https://github.com/emscripten-core/emscripten/tree/main/tests/poppler>`_.
+The Emscripten test suite (`test/runner.py <https://github.com/emscripten-core/emscripten/blob/main/test/runner.py>`_) contains a number of good examples — large C/C++ projects that are built using their normal build systems as described above: `freetype <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/freetype>`_, `openjpeg <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/openjpeg>`_, `zlib <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/zlib>`_, `bullet <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/bullet>`_ and `poppler <https://github.com/emscripten-core/emscripten/tree/main/test/third_party/poppler>`_.
 
-It is also worth looking at the build scripts in the `ammo.js <https://github.com/kripken/ammo.js/blob/master/make.py>`_ project.
+It is also worth looking at the build scripts in the `ammo.js <https://github.com/kripken/ammo.js/blob/main/CMakeLists.txt>`_ project.
 
 
 Troubleshooting
@@ -386,4 +403,4 @@ Troubleshooting
 
   .. note:: You can use ``llvm-nm`` to see which symbols are defined in each object file.
 
-  One solution is to use the _`dynamic-linking` approach described above. This ensures that libraries are linked only once, in the final build stage.
+  One solution is to use :ref:`dynamic-linking <Dynamic-Linking>`. This ensures that libraries are linked only once, in the final build stage.

@@ -36,18 +36,18 @@ mergeInto(LibraryManager.library, {
   // Supported preprocessor directives: #if, #ifdef, #ifndef, #else, #elif, #endif, #define and #undef.
   // predefs: Specifies a dictionary of { 'key1': function(arg0, arg1) {...}, 'key2': ... } of predefined preprocessing variables
   $preprocess_c_code__deps: ['$jstoi_q', '$find_closing_parens_index'],
-  $preprocess_c_code: function(code, defs) {
+  $preprocess_c_code: function(code, defs = {}) {
     var i = 0, // iterator over the input string
       len = code.length, // cache input length
       out = '', // generates the preprocessed output string
       stack = [1]; // preprocessing stack (state of active/inactive #ifdef/#else blocks we are currently inside)
     // a mapping 'symbolname' -> function(args) which evaluates the given cpp macro, e.g. #define FOO(x) x+10.
-    defs = defs || {};
-    defs['defined'] = function(args) { // built-in "#if defined(x)"" macro.
+    defs['defined'] = (args) => { // built-in "#if defined(x)"" macro.
 #if ASSERTIONS
       assert(args.length == 1);
+      assert(/^[A-Za-z0-9_$]+$/.test(args[0].trim())); // Test that a C preprocessor identifier contains only valid characters (we likely parsed wrong if this fails)
 #endif
-      return defs[args[0]] ? 1 : 0;
+      return defs[args[0].trim()] ? 1 : 0;
     };
 
     // Returns true if str[i] is whitespace.
@@ -123,21 +123,25 @@ mergeInto(LibraryManager.library, {
               var pp = defs[symbol];
               if (pp) {
                 var expanded = str.substring(lineStart, i);
-                if (pp.length && str[j] == '(') { // Expanding a macro? (#define FOO(X) ...)
-                  var closeParens = find_closing_parens_index(str, j);
-#if ASSERTIONS
-                  assert(str[closeParens] == ')');
-#endif
-                  expanded += pp(str.substring(j+1, closeParens).split(',')) + str.substring(closeParens+1, lineEnd);
+                if (pp.length) { // Expanding a macro? (#define FOO(X) ...)
+                  while (isWhitespace(str, j)) ++j;
+                  if (str[j] == '(') {
+                    var closeParens = find_closing_parens_index(str, j);
+                    // N.b. this has a limitation that multiparameter macros cannot nest with other multiparameter macros
+                    // e.g. FOO(a, BAR(b, c)) is not supported.
+                    expanded += pp(str.substring(j+1, closeParens).split(',')) + str.substring(closeParens+1, lineEnd);
+                  } else {
+                    var j2 = nextWhitespace(str, j);
+                    expanded += pp([str.substring(j, j2)]) + str.substring(j2, lineEnd);
+                  }
                 } else { // Expanding a non-macro (#define FOO BAR)
                   expanded += pp() + str.substring(j, lineEnd);
                 }
                 return expandMacros(expanded, 0);
-              } else {
-                out += symbol;
-                i = j-1;
-                break;
               }
+              out += symbol;
+              i = j-1;
+              break;
             }
           }
         } else {
@@ -151,7 +155,7 @@ mergeInto(LibraryManager.library, {
     function buildExprTree(tokens) {
       // Consume tokens array into a function tree until the tokens array is exhausted
       // to a single root node that evaluates it.
-      while(tokens.length > 1 || typeof(tokens[0]) != 'function') {
+      while (tokens.length > 1 || typeof tokens[0] != 'function') {
         tokens = (function(tokens) {
           // Find the index 'i' of the operator we should evaluate next:
           var i, j, p, operatorAndPriority = -2;
@@ -245,7 +249,7 @@ mergeInto(LibraryManager.library, {
         break;
       case 'ifdef': stack.push(!!defs[expression] * stack[stack.length-1]); break;
       case 'ifndef': stack.push(!defs[expression] * stack[stack.length-1]); break;
-      case 'else': stack[stack.length-1] = 1-stack[stack.length-1]; break;
+      case 'else': stack[stack.length-1] = (1-stack[stack.length-1]) * stack[stack.length-2]; break;
       case 'endif': stack.pop(); break;
       case 'define':
         if (thisLineIsInActivePreprocessingBlock) {
@@ -258,7 +262,7 @@ mergeInto(LibraryManager.library, {
             var macroEnd = expression.indexOf(')', macroStart);
             let params = expression.substring(macroStart+1, macroEnd).split(',').map(x => x.trim());
             let value = tokenize(expression.substring(macroEnd+1).trim())
-            defs[expression.substring(0, macroStart)] = function(args) {
+            defs[expression.substring(0, macroStart)] = (args) => {
               var ret = '';
               value.forEach((x) => {
                 var argIndex = params.indexOf(x);
@@ -268,15 +272,13 @@ mergeInto(LibraryManager.library, {
             };
           } else { // #define FOO (x + y + z)
             let value = expandMacros(expression.substring(firstWs+1).trim(), 0);
-            defs[expression.substring(0, firstWs)] = function() {
-              return value;
-            };
+            defs[expression.substring(0, firstWs)] = () => value;
           }
         }
         break;
       case 'undef': if (thisLineIsInActivePreprocessingBlock) delete defs[expression]; break;
       default:
-        if (directive != 'version' && directive != 'pragma' && directive != 'extension') { // GLSL shader compiler specific #directives.
+        if (directive != 'version' && directive != 'pragma' && directive != 'extension' && directive != 'line') { // GLSL shader compiler specific #directives.
 #if ASSERTIONS
           err('Unrecognized preprocessor directive #' + directive + '!');
 #endif

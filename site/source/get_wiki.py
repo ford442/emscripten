@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Copyright 2014 The Emscripten Authors.  All rights reserved.
 # Emscripten is available under two separate licenses, the MIT license and the
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
@@ -14,7 +14,6 @@
 # It should be called prior to building the site.
 #
 
-from __future__ import print_function
 import optparse
 import os
 import re
@@ -116,7 +115,7 @@ def ConvertFilesToRst():
         length = len(title)
         # print length
         headerbar = ''
-        for number in range(length):
+        for _ in range(length):
             headerbar += '='
         page_reference = filenamestripped
         page_reference_link_text = '.. _%s:\n\n' % page_reference

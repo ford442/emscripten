@@ -16,11 +16,7 @@ var LibraryWget = {
     },
   },
 
-  emscripten_async_wget__deps: ['$PATH_FS', '$wget', '$callUserCallback', '$Browser',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
+  emscripten_async_wget__deps: ['$PATH_FS', '$wget', '$callUserCallback', '$Browser', '$withStackSave', '$allocateUTF8OnStack'],
   emscripten_async_wget__proxy: 'sync',
   emscripten_async_wget__sig: 'viiii',
   emscripten_async_wget: function(url, file, onload, onerror) {
@@ -33,9 +29,9 @@ var LibraryWget = {
       if (callback) {
         {{{ runtimeKeepalivePop() }}}
         callUserCallback(function() {
-          var stack = stackSave();
-          {{{ makeDynCall('vi', 'callback') }}}(allocate(intArrayFromString(_file), ALLOC_STACK));
-          stackRestore(stack);
+          withStackSave(function() {
+            {{{ makeDynCall('vi', 'callback') }}}(allocateUTF8OnStack(_file));
+          });
         });
       }
     }
@@ -63,11 +59,7 @@ var LibraryWget = {
     );
   },
 
-  emscripten_async_wget_data__deps: ['$asyncLoad', 'malloc', 'free', '$callUserCallback',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
+  emscripten_async_wget_data__deps: ['$asyncLoad', 'malloc', 'free', '$callUserCallback'],
   emscripten_async_wget_data__proxy: 'sync',
   emscripten_async_wget_data__sig: 'viiii',
   emscripten_async_wget_data: function(url, arg, onload, onerror) {
@@ -90,11 +82,7 @@ var LibraryWget = {
     }, true /* no need for run dependency, this is async but will not do any prepare etc. step */ );
   },
 
-  emscripten_async_wget2__deps: ['$PATH_FS', '$wget',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
+  emscripten_async_wget2__deps: ['$PATH_FS', '$wget', '$withStackSave', '$allocateUTF8OnStack'],
   emscripten_async_wget2__proxy: 'sync',
   emscripten_async_wget2__sig: 'iiiiiiiii',
   emscripten_async_wget2: function(url, file, request, param, arg, onload, onerror, onprogress) {
@@ -128,9 +116,9 @@ var LibraryWget = {
 
         FS.createDataFile( _file.substr(0, index), _file.substr(index + 1), new Uint8Array(/** @type{ArrayBuffer}*/(http.response)), true, true, false);
         if (onload) {
-          var stack = stackSave();
-          {{{ makeDynCall('viii', 'onload') }}}(handle, arg, allocate(intArrayFromString(_file), ALLOC_STACK));
-          stackRestore(stack);
+          withStackSave(function() {
+            {{{ makeDynCall('viii', 'onload') }}}(handle, arg, allocateUTF8OnStack(_file));
+          });
         }
       } else {
         if (onerror) {{{ makeDynCall('viii', 'onerror') }}}(handle, arg, http.status);

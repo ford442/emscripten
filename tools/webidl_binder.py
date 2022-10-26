@@ -11,12 +11,14 @@ https://emscripten.org/docs/porting/connecting_cpp_and_javascript/WebIDL-Binder.
 import os
 import sys
 
-sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+__scriptdir__ = os.path.dirname(os.path.abspath(__file__))
+__rootdir__ = os.path.dirname(__scriptdir__)
+sys.path.append(__rootdir__)
 
-from tools import shared, utils
+from tools import utils
 
-sys.path.append(shared.path_from_root('third_party'))
-sys.path.append(shared.path_from_root('third_party', 'ply'))
+sys.path.append(utils.path_from_root('third_party'))
+sys.path.append(utils.path_from_root('third_party/ply'))
 
 import WebIDL
 
@@ -41,15 +43,15 @@ class Dummy:
     for k, v in init.items():
       self.__dict__[k] = v
 
-  def getExtendedAttribute(self, name): # noqa: U100
+  def getExtendedAttribute(self, _name):
     return None
 
 
 input_file = sys.argv[1]
 output_base = sys.argv[2]
 
-shared.try_delete(output_base + '.cpp')
-shared.try_delete(output_base + '.js')
+utils.delete_file(output_base + '.cpp')
+utils.delete_file(output_base + '.js')
 
 p = WebIDL.Parser()
 p.parse(r'''
@@ -79,6 +81,8 @@ mid_js = []
 
 pre_c += [r'''
 #include <emscripten.h>
+
+EM_JS_DEPS(webidl_binder, "$intArrayFromString");
 ''']
 
 mid_c += [r'''
@@ -586,14 +590,14 @@ def render_function(class_name, func_name, sigs, return_type, non_pointer,
     if not constructor:
       if i == max_args:
         dec_args = ', '.join([type_to_cdec(raw[j]) + ' ' + args[j] for j in range(i)])
-        js_call_args = ', '.join(['%s%s' % (('(int)' if sig[j] in interfaces else '') + take_addr_if_nonpointer(raw[j]), args[j]) for j in range(i)])
+        js_call_args = ', '.join(['%s%s' % (('(ptrdiff_t)' if sig[j] in interfaces else '') + take_addr_if_nonpointer(raw[j]), args[j]) for j in range(i)])
 
         js_impl_methods.append(r'''  %s %s(%s) %s {
     %sEM_ASM_%s({
       var self = Module['getCache'](Module['%s'])[$0];
       if (!self.hasOwnProperty('%s')) throw 'a JSImplementation must implement all functions, you forgot %s::%s.';
       %sself['%s'](%s)%s;
-    }, (int)this%s);
+    }, (ptrdiff_t)this%s);
   }''' % (c_return_type, func_name, dec_args, maybe_const,
           basic_return, 'INT' if c_return_type not in C_FLOATS else 'DOUBLE',
           class_name,
@@ -807,7 +811,7 @@ if len(deferred_js):
     %s
   }
   if (runtimeInitialized) setupEnums();
-  else addOnPreMain(setupEnums);
+  else addOnInit(setupEnums);
 })();
 ''' % '\n    '.join(deferred_js)]
 

@@ -5,37 +5,43 @@
 
 import logging
 import os
-import shutil
 
 TAG = 'release-68-2'
 VERSION = '68_2'
 HASH = '12c3db5966c234c94e7918fb8acc8bd0838edc36a620f3faa788e7ff27b06f1aa431eb117401026e3963622b9323212f444b735d5c9dd3d0b82d772a4834b993'
 
-libname_libicu_common = 'libicu_common.a'
-libname_libicu_stubdata = 'libicu_stubdata.a'
-libname_libicu_i18n = 'libicu_i18n.a'
+variants = {'icu-mt': {'USE_PTHREADS': 1}}
+
+libname_libicu_common = 'libicu_common'
+libname_libicu_stubdata = 'libicu_stubdata'
+libname_libicu_i18n = 'libicu_i18n'
 
 
 def needed(settings):
   return settings.USE_ICU
 
 
+def get_lib_name(base_name, settings):
+  return base_name + ('-mt' if settings.USE_PTHREADS else '') + '.a'
+
+
 def get(ports, settings, shared):
   url = 'https://github.com/unicode-org/icu/releases/download/%s/icu4c-%s-src.zip' % (TAG, VERSION)
   ports.fetch_project('icu', url, 'icu', sha512hash=HASH)
-  icu_source_path = os.path.join(ports.get_build_dir(), 'icu', 'source')
+  icu_source_path = None
 
   def prepare_build():
+    nonlocal icu_source_path
     source_path = os.path.join(ports.get_dir(), 'icu', 'icu') # downloaded icu4c path
-    dest_path = os.path.join(ports.get_build_dir(), 'icu') # icu build path
-    logging.debug(f'preparing for icu build: {source_path} -> {dest_path}')
-    shutil.rmtree(dest_path, ignore_errors=True)
-    shutil.copytree(source_path, dest_path)
+    icu_source_path = os.path.join(source_path, 'source')
 
   def build_lib(lib_output, lib_src, other_includes, build_flags):
     logging.debug('building port: icu- ' + lib_output)
 
     additional_build_flags = [
+        # TODO: investigate why this is needed and remove
+        '-Wno-macro-redefined',
+        '-Wno-deprecated-declarations',
         # usage of 'using namespace icu' is deprecated: icu v61
         '-DU_USING_ICU_NAMESPACE=0',
         # make explicit inclusion of utf header: ref utf.h
@@ -48,7 +54,10 @@ def get(ports, settings, shared):
         # CXXFLAGS
         '-std=c++11'
     ]
-    ports.build_port(lib_src, lib_output, other_includes, build_flags + additional_build_flags)
+    if settings.USE_PTHREADS:
+      additional_build_flags.append('-pthread')
+
+    ports.build_port(lib_src, lib_output, 'icu', includes=other_includes, flags=build_flags + additional_build_flags)
 
   # creator for libicu_common
   def create_libicu_common(lib_output):
@@ -71,16 +80,16 @@ def get(ports, settings, shared):
     build_lib(lib_output, lib_src, other_includes, ['-DU_I18N_IMPLEMENTATION=1'])
 
   return [
-      shared.Cache.get_lib(libname_libicu_common, create_libicu_common), # this also prepares the build
-      shared.Cache.get_lib(libname_libicu_stubdata, create_libicu_stubdata),
-      shared.Cache.get_lib(libname_libicu_i18n, create_libicu_i18n)
+      shared.Cache.get_lib(get_lib_name(libname_libicu_common, settings), create_libicu_common), # this also prepares the build
+      shared.Cache.get_lib(get_lib_name(libname_libicu_stubdata, settings), create_libicu_stubdata),
+      shared.Cache.get_lib(get_lib_name(libname_libicu_i18n, settings), create_libicu_i18n)
   ]
 
 
 def clear(ports, settings, shared):
-  shared.Cache.erase_lib(libname_libicu_common)
-  shared.Cache.erase_lib(libname_libicu_stubdata)
-  shared.Cache.erase_lib(libname_libicu_i18n)
+  shared.Cache.erase_lib(get_lib_name(libname_libicu_common, settings))
+  shared.Cache.erase_lib(get_lib_name(libname_libicu_stubdata, settings))
+  shared.Cache.erase_lib(get_lib_name(libname_libicu_i18n, settings))
 
 
 def process_args(ports):

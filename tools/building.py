@@ -13,7 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
+from typing import Set, Dict
 from subprocess import PIPE
 
 from . import diagnostics
@@ -21,14 +21,14 @@ from . import response_file
 from . import shared
 from . import webassembly
 from . import config
-from .shared import CLANG_CC, CLANG_CXX, PYTHON
-from .shared import LLVM_NM, EMCC, EMAR, EMXX, EMRANLIB, WASM_LD, LLVM_AR
-from .shared import LLVM_LINK, LLVM_OBJCOPY
-from .shared import try_delete, run_process, check_call, exit_with_error
-from .shared import configuration, path_from_root
+from . import utils
+from .shared import CLANG_CC, CLANG_CXX
+from .shared import LLVM_NM, EMCC, EMAR, EMXX, EMRANLIB, WASM_LD
+from .shared import LLVM_OBJCOPY
+from .shared import run_process, check_call, exit_with_error
+from .shared import path_from_root
 from .shared import asmjs_mangle, DEBUG
-from .shared import TEMP_DIR
-from .shared import CANONICAL_TEMP_DIR, LLVM_DWARFDUMP, demangle_c_symbol_name
+from .shared import LLVM_DWARFDUMP, demangle_c_symbol_name
 from .shared import get_emscripten_temp_dir, exe_suffix, is_c_symbol
 from .utils import WINDOWS
 from .settings import settings
@@ -37,109 +37,13 @@ logger = logging.getLogger('building')
 
 #  Building
 binaryen_checked = False
+EXPECTED_BINARYEN_VERSION = 109
 
-EXPECTED_BINARYEN_VERSION = 101
 # cache results of nm - it can be slow to run
 nm_cache = {}
-# Stores the object files contained in different archive files passed as input
-ar_contents = {}
-_is_ar_cache = {}
+_is_ar_cache: Dict[str, bool] = {}
 # the exports the user requested
-user_requested_exports = set()
-
-
-class ObjectFileInfo:
-  def __init__(self, returncode, output, defs=set(), undefs=set(), commons=set()):
-    self.returncode = returncode
-    self.output = output
-    self.defs = defs
-    self.undefs = undefs
-    self.commons = commons
-
-  def is_valid_for_nm(self):
-    return self.returncode == 0
-
-
-# llvm-ar appears to just use basenames inside archives. as a result, files
-# with the same basename will trample each other when we extract them. to help
-# warn of such situations, we warn if there are duplicate entries in the
-# archive
-def warn_if_duplicate_entries(archive_contents, archive_filename):
-  if len(archive_contents) != len(set(archive_contents)):
-    msg = '%s: archive file contains duplicate entries. This is not supported by emscripten. Only the last member with a given name will be linked in which can result in undefined symbols. You should either rename your source files, or use `emar` to create you archives which works around this issue.' % archive_filename
-    warned = set()
-    for i in range(len(archive_contents)):
-      curr = archive_contents[i]
-      if curr not in warned and curr in archive_contents[i + 1:]:
-        msg += '\n   duplicate: %s' % curr
-        warned.add(curr)
-    diagnostics.warning('emcc', msg)
-
-
-# Extracts the given list of archive files and outputs their contents
-def extract_archive_contents(archive_files):
-  archive_results = shared.run_multiple_processes([[LLVM_AR, 't', a] for a in archive_files], pipe_stdout=True)
-
-  unpack_temp_dir = tempfile.mkdtemp('_archive_contents', 'emscripten_temp_')
-
-  def clean_at_exit():
-    try_delete(unpack_temp_dir)
-  shared.atexit.register(clean_at_exit)
-
-  archive_contents = []
-
-  for i in range(len(archive_results)):
-    a = archive_results[i]
-    contents = [l for l in a.splitlines() if len(l)]
-    if len(contents) == 0:
-      logger.debug('Archive %s appears to be empty (recommendation: link an .so instead of .a)' % a)
-
-    # `ar` files can only contains filenames. Just to be sure, verify that each
-    # file has only as filename component and is not absolute
-    for f in contents:
-      assert not os.path.dirname(f)
-      assert not os.path.isabs(f)
-
-    warn_if_duplicate_entries(contents, a)
-
-    archive_contents += [{
-      'archive_name': archive_files[i],
-      'o_files': [os.path.join(unpack_temp_dir, c) for c in contents]
-    }]
-
-  shared.run_multiple_processes([[LLVM_AR, 'xo', a] for a in archive_files], cwd=unpack_temp_dir)
-
-  # check that all files were created
-  for a in archive_contents:
-    missing_contents = [x for x in a['o_files'] if not os.path.exists(x)]
-    if missing_contents:
-      exit_with_error(f'llvm-ar failed to extract file(s) {missing_contents} from archive file {f}!')
-
-  return archive_contents
-
-
-def unique_ordered(values):
-  """return a list of unique values in an input list, without changing order
-  (list(set(.)) would change order randomly).
-  """
-  seen = set()
-
-  def check(value):
-    if value in seen:
-      return False
-    seen.add(value)
-    return True
-
-  return [v for v in values if check(v)]
-
-
-# clear caches. this is not normally needed, except if the clang/LLVM
-# used changes inside this invocation of Building, which can happen in the benchmarker
-# when it compares different builds.
-def clear():
-  nm_cache.clear()
-  ar_contents.clear()
-  _is_ar_cache.clear()
+user_requested_exports: Set[str] = set()
 
 
 # .. but for Popen, we cannot have doublequotes, so provide functionality to
@@ -171,7 +75,7 @@ def get_building_env():
   env['HOST_CXX'] = CLANG_CXX
   env['HOST_CFLAGS'] = '-W' # if set to nothing, CFLAGS is used, which we don't want
   env['HOST_CXXFLAGS'] = '-W' # if set to nothing, CXXFLAGS is used, which we don't want
-  env['PKG_CONFIG_LIBDIR'] = shared.Cache.get_sysroot_dir('local', 'lib', 'pkgconfig') + os.path.pathsep + shared.Cache.get_sysroot_dir('lib', 'pkgconfig')
+  env['PKG_CONFIG_LIBDIR'] = shared.Cache.get_sysroot_dir('local/lib/pkgconfig') + os.path.pathsep + shared.Cache.get_sysroot_dir('lib/pkgconfig')
   env['PKG_CONFIG_PATH'] = os.environ.get('EM_PKG_CONFIG_PATH', '')
   env['EMSCRIPTEN'] = path_from_root()
   env['PATH'] = shared.Cache.get_sysroot_dir('bin') + os.pathsep + env['PATH']
@@ -179,132 +83,32 @@ def get_building_env():
   return env
 
 
-# Returns a clone of the given environment with all directories that contain
-# sh.exe removed from the PATH.  Used to work around CMake limitation with
-# MinGW Makefiles, where sh.exe is not allowed to be present.
-def remove_sh_exe_from_path(env):
-  # Should only ever be called on WINDOWS
-  assert WINDOWS
-  env = env.copy()
-  path = env['PATH'].split(';')
-  path = [p for p in path if not os.path.exists(os.path.join(p, 'sh.exe'))]
-  env['PATH'] = ';'.join(path)
-  return env
-
-
-def make_paths_absolute(f):
-  if f.startswith('-'):  # skip flags
-    return f
-  else:
-    return os.path.abspath(f)
-
-
-# Runs llvm-nm for the given list of files.
-# The results are populated in nm_cache
-@ToolchainProfiler.profile_block('llvm_nm_multiple')
+@ToolchainProfiler.profile()
 def llvm_nm_multiple(files):
+  """Runs llvm-nm for the given list of files.
+
+  The results are populated in nm_cache, and also returned as an array with
+  order corresponding with the input files.
+  If a given file cannot be processed, None will be present in its place.
+  """
   if len(files) == 0:
     return []
   # Run llvm-nm on files that we haven't cached yet
-  llvm_nm_files = [f for f in files if f not in nm_cache]
+  cmd = [LLVM_NM, '--print-file-name'] + [f for f in files if f not in nm_cache]
+  cmd = get_command_with_possible_response_file(cmd)
+  results = run_process(cmd, stdout=PIPE, stderr=PIPE, check=False)
 
-  # We can issue multiple files in a single llvm-nm calls, but only if those
-  # files are all .o or .bc files. Because of llvm-nm output format, we cannot
-  # llvm-nm multiple .a files in one call, but those must be individually checked.
+  # If one or more of the input files cannot be processed, llvm-nm will return
+  # a non-zero error code, but it will still process and print out all the
+  # other files in order. So even if process return code is non zero, we should
+  # always look at what we got to stdout.
+  if results.returncode != 0:
+    logger.debug(f'Subcommand {" ".join(cmd)} failed with return code {results.returncode}! (An input file was corrupt?)')
 
-  a_files = [f for f in llvm_nm_files if is_ar(f)]
-  o_files = [f for f in llvm_nm_files if f not in a_files]
+  for key, value in parse_llvm_nm_symbols(results.stdout).items():
+    nm_cache[key] = value
 
-  # Issue parallel calls for .a files
-  if len(a_files) > 0:
-    results = shared.run_multiple_processes([[LLVM_NM, a] for a in a_files], pipe_stdout=True, check=False)
-    for i in range(len(results)):
-      nm_cache[a_files[i]] = parse_symbols(results[i])
-
-  # Issue a single batch call for multiple .o files
-  if len(o_files) > 0:
-    cmd = [LLVM_NM] + o_files
-    cmd = get_command_with_possible_response_file(cmd)
-    results = run_process(cmd, stdout=PIPE, stderr=PIPE, check=False)
-
-    # If one or more of the input files cannot be processed, llvm-nm will return a non-zero error code, but it will still process and print
-    # out all the other files in order. So even if process return code is non zero, we should always look at what we got to stdout.
-    if results.returncode != 0:
-      logger.debug(f'Subcommand {" ".join(cmd)} failed with return code {results.returncode}! (An input file was corrupt?)')
-
-    results = results.stdout
-
-    # llvm-nm produces a single listing of form
-    # file1.o:
-    # 00000001 T __original_main
-    #          U __stack_pointer
-    #
-    # file2.o:
-    # 0000005d T main
-    #          U printf
-    #
-    # ...
-    # so loop over the report to extract the results
-    # for each individual file.
-
-    filename = o_files[0]
-
-    # When we dispatched more than one file, we must manually parse
-    # the file result delimiters (like shown structured above)
-    if len(o_files) > 1:
-      file_start = 0
-      i = 0
-
-      while True:
-        nl = results.find('\n', i)
-        if nl < 0:
-          break
-        colon = results.rfind(':', i, nl)
-        if colon >= 0 and results[colon + 1] == '\n': # New file start?
-          nm_cache[filename] = parse_symbols(results[file_start:i - 1])
-          filename = results[i:colon].strip()
-          file_start = colon + 2
-        i = nl + 1
-
-      nm_cache[filename] = parse_symbols(results[file_start:])
-    else:
-      # We only dispatched a single file, so can parse all of the result directly
-      # to that file.
-      nm_cache[filename] = parse_symbols(results)
-
-  return [nm_cache[f] if f in nm_cache else ObjectFileInfo(1, '') for f in files]
-
-
-def llvm_nm(file):
-  return llvm_nm_multiple([file])[0]
-
-
-@ToolchainProfiler.profile_block('read_link_inputs')
-def read_link_inputs(files):
-  # Before performing the link, we need to look at each input file to determine which symbols
-  # each of them provides. Do this in multiple parallel processes.
-  archive_names = [] # .a files passed in to the command line to the link
-  object_names = [] # .o/.bc files passed in to the command line to the link
-  for f in files:
-    absolute_path_f = make_paths_absolute(f)
-
-    if absolute_path_f not in ar_contents and is_ar(absolute_path_f):
-      archive_names.append(absolute_path_f)
-    elif absolute_path_f not in nm_cache and is_bitcode(absolute_path_f):
-      object_names.append(absolute_path_f)
-
-  # Archives contain objects, so process all archives first in parallel to obtain the object files in them.
-  archive_contents = extract_archive_contents(archive_names)
-
-  for a in archive_contents:
-    ar_contents[os.path.abspath(a['archive_name'])] = a['o_files']
-    for o in a['o_files']:
-      if o not in nm_cache:
-        object_names.append(o)
-
-  # Next, extract symbols from all object files (either standalone or inside archives we just extracted)
-  # The results are not used here directly, but populated to llvm-nm cache structure.
-  llvm_nm_multiple(object_names)
+  return [nm_cache[f] if f in nm_cache else {'defs': set(), 'undefs': set(), 'parse_error': True} for f in files]
 
 
 def llvm_backend_args():
@@ -318,13 +122,16 @@ def llvm_backend_args():
     # When 'main' has a non-standard signature, LLVM outlines its content out to
     # '__original_main'. So we add it to the allowed list as well.
     if 'main' in settings.EXCEPTION_CATCHING_ALLOWED:
-      settings.EXCEPTION_CATCHING_ALLOWED += ['__original_main']
+      settings.EXCEPTION_CATCHING_ALLOWED += ['__original_main', '__main_argc_argv']
     allowed = ','.join(settings.EXCEPTION_CATCHING_ALLOWED)
     args += ['-emscripten-cxx-exceptions-allowed=' + allowed]
 
-  if settings.SUPPORT_LONGJMP:
-    # asm.js-style setjmp/longjmp handling
+  # asm.js-style setjmp/longjmp handling
+  if settings.SUPPORT_LONGJMP == 'emscripten':
     args += ['-enable-emscripten-sjlj']
+  # setjmp/longjmp handling using Wasm EH
+  elif settings.SUPPORT_LONGJMP == 'wasm':
+    args += ['-wasm-enable-sjlj']
 
   # better (smaller, sometimes faster) codegen, see binaryen#1054
   # and https://bugs.llvm.org/show_bug.cgi?id=39488
@@ -333,63 +140,51 @@ def llvm_backend_args():
   return args
 
 
-@ToolchainProfiler.profile_block('linking to object file')
+@ToolchainProfiler.profile()
 def link_to_object(args, target):
-  # link using lld unless LTO is requested (lld can't output LTO/bitcode object files).
-  if not settings.LTO:
-    link_lld(args + ['--relocatable'], target)
-  else:
-    link_bitcode(args, target)
-
-
-def link_llvm(linker_inputs, target):
-  # runs llvm-link to link things.
-  cmd = [LLVM_LINK] + linker_inputs + ['-o', target]
-  cmd = get_command_with_possible_response_file(cmd)
-  check_call(cmd)
+  link_lld(args + ['--relocatable'], target)
 
 
 def lld_flags_for_executable(external_symbols):
   cmd = []
   if external_symbols:
-    undefs = configuration.get_temp_files().get('.undefined').name
-    with open(undefs, 'w') as f:
-      f.write('\n'.join(external_symbols))
+    undefs = shared.get_temp_files().get('.undefined').name
+    utils.write_file(undefs, '\n'.join(external_symbols))
     cmd.append('--allow-undefined-file=%s' % undefs)
   else:
-    cmd.append('--allow-undefined')
+    cmd.append('--import-undefined')
 
   if settings.IMPORTED_MEMORY:
     cmd.append('--import-memory')
 
-  if settings.USE_PTHREADS:
+  if settings.SHARED_MEMORY:
     cmd.append('--shared-memory')
-
-  if settings.MEMORY64:
-    cmd.append('-mwasm64')
 
   # wasm-ld can strip debug info for us. this strips both the Names
   # section and DWARF, so we can only use it when we don't need any of
   # those things.
   if settings.DEBUG_LEVEL < 2 and (not settings.EMIT_SYMBOL_MAP and
-                                   not settings.PROFILING_FUNCS and
+                                   not settings.EMIT_NAME_SECTION and
                                    not settings.ASYNCIFY):
     cmd.append('--strip-debug')
 
   if settings.LINKABLE:
-    cmd.append('--export-all')
-    cmd.append('--no-gc-sections')
-  else:
-    c_exports = [e for e in settings.EXPORTED_FUNCTIONS if is_c_symbol(e)]
-    # Strip the leading underscores
-    c_exports = [demangle_c_symbol_name(e) for e in c_exports]
-    if external_symbols:
-      # Filter out symbols external/JS symbols
-      c_exports = [e for e in c_exports if e not in external_symbols]
-    for export in c_exports:
-      cmd += ['--export', export]
+    cmd.append('--export-dynamic')
 
-    for export in settings.EXPORT_IF_DEFINED:
+  c_exports = [e for e in settings.EXPORTED_FUNCTIONS if is_c_symbol(e)]
+  # Strip the leading underscores
+  c_exports = [demangle_c_symbol_name(e) for e in c_exports]
+  c_exports += settings.EXPORT_IF_DEFINED
+  if external_symbols:
+    # Filter out symbols external/JS symbols
+    c_exports = [e for e in c_exports if e not in external_symbols]
+  for export in c_exports:
+    cmd.append('--export-if-defined=' + export)
+
+  for export in settings.REQUIRED_EXPORTS:
+    if settings.ERROR_ON_UNDEFINED_SYMBOLS:
+      cmd.append('--export=' + export)
+    else:
       cmd.append('--export-if-defined=' + export)
 
   if settings.RELOCATABLE:
@@ -418,9 +213,13 @@ def lld_flags_for_executable(external_symbols):
       if not settings.EXPECT_MAIN:
         cmd += ['--entry=_initialize']
     else:
-      if settings.EXPECT_MAIN and not settings.IGNORE_MISSING_MAIN:
-        cmd += ['--entry=main']
+      if settings.PROXY_TO_PTHREAD:
+        cmd += ['--entry=_emscripten_proxy_main']
       else:
+        # TODO(sbc): Avoid passing --no-entry when we know we have an entry point.
+        # For now we need to do this since the entry point can be either `main` or
+        # `__main_argv_argc`, but we should address that by using a single `_start`
+        # function like we do in STANDALONE_WASM mode.
         cmd += ['--no-entry']
     if not settings.ALLOW_MEMORY_GROWTH:
       cmd.append('--max-memory=%d' % settings.INITIAL_MEMORY)
@@ -454,14 +253,13 @@ def link_lld(args, target, external_symbols=None):
   for a in llvm_backend_args():
     cmd += ['-mllvm', a]
 
-  # Wasm exception handling. This is a CodeGen option for the LLVM backend, so
-  # wasm-ld needs to take this for the LTO mode.
-  # When wasm EH is enabled, we use the legacy pass manager because the new pass
-  # manager + wasm EH has some known bugs. See
-  # https://github.com/emscripten-core/emscripten/issues/14180.
-  # TODO Switch to the new pass manager.
-  if settings.EXCEPTION_HANDLING:
-    cmd += ['-mllvm', '-exception-model=wasm', '--lto-legacy-pass-manager']
+  if settings.WASM_EXCEPTIONS:
+    cmd += ['-mllvm', '-wasm-enable-eh']
+  if settings.WASM_EXCEPTIONS or settings.SUPPORT_LONGJMP == 'wasm':
+    cmd += ['-mllvm', '-exception-model=wasm']
+
+  if settings.MEMORY64:
+    cmd.append('-mwasm64')
 
   # For relocatable output (generating an object file) we don't pass any of the
   # normal linker flags that are used when building and exectuable
@@ -472,193 +270,77 @@ def link_lld(args, target, external_symbols=None):
   check_call(cmd)
 
 
-def link_bitcode(args, target, force_archive_contents=False):
-  # "Full-featured" linking: looks into archives (duplicates lld functionality)
-  input_files = [a for a in args if not a.startswith('-')]
-  files_to_link = []
-  # Tracking unresolveds is necessary for .a linking, see below.
-  # Specify all possible entry points to seed the linking process.
-  # For a simple application, this would just be "main".
-  unresolved_symbols = set([func[1:] for func in settings.EXPORTED_FUNCTIONS])
-  resolved_symbols = set()
-  # Paths of already included object files from archives.
-  added_contents = set()
-  has_ar = any(is_ar(make_paths_absolute(f)) for f in input_files)
-
-  # If we have only one archive or the force_archive_contents flag is set,
-  # then we will add every object file we see, regardless of whether it
-  # resolves any undefined symbols.
-  force_add_all = len(input_files) == 1 or force_archive_contents
-
-  # Considers an object file for inclusion in the link. The object is included
-  # if force_add=True or if the object provides a currently undefined symbol.
-  # If the object is included, the symbol tables are updated and the function
-  # returns True.
-  def consider_object(f, force_add=False):
-    new_symbols = llvm_nm(f)
-    # Check if the object was valid according to llvm-nm. It also accepts
-    # native object files.
-    if not new_symbols.is_valid_for_nm():
-      diagnostics.warning('emcc', 'object %s is not valid according to llvm-nm, cannot link', f)
-      return False
-    # Check the object is valid for us, and not a native object file.
-    if not is_bitcode(f):
-      exit_with_error('unknown file type: %s', f)
-    provided = new_symbols.defs.union(new_symbols.commons)
-    do_add = force_add or not unresolved_symbols.isdisjoint(provided)
-    if do_add:
-      logger.debug('adding object %s to link (forced: %d)' % (f, force_add))
-      # Update resolved_symbols table with newly resolved symbols
-      resolved_symbols.update(provided)
-      # Update unresolved_symbols table by adding newly unresolved symbols and
-      # removing newly resolved symbols.
-      unresolved_symbols.update(new_symbols.undefs.difference(resolved_symbols))
-      unresolved_symbols.difference_update(provided)
-      files_to_link.append(f)
-    return do_add
-
-  # Traverse a single archive. The object files are repeatedly scanned for
-  # newly satisfied symbols until no new symbols are found. Returns true if
-  # any object files were added to the link.
-  def consider_archive(f, force_add):
-    added_any_objects = False
-    loop_again = True
-    logger.debug('considering archive %s' % (f))
-    contents = ar_contents[f]
-    while loop_again: # repeatedly traverse until we have everything we need
-      loop_again = False
-      for content in contents:
-        if content in added_contents:
-          continue
-        # Link in the .o if it provides symbols, *or* this is a singleton archive (which is
-        # apparently an exception in gcc ld)
-        if consider_object(content, force_add=force_add):
-          added_contents.add(content)
-          loop_again = True
-          added_any_objects = True
-    logger.debug('done running loop of archive %s' % (f))
-    return added_any_objects
-
-  read_link_inputs(input_files)
-
-  # Rescan a group of archives until we don't find any more objects to link.
-  def scan_archive_group(group):
-    loop_again = True
-    logger.debug('starting archive group loop')
-    while loop_again:
-      loop_again = False
-      for archive in group:
-        if consider_archive(archive, force_add=False):
-          loop_again = True
-    logger.debug('done with archive group loop')
-
-  current_archive_group = None
-  in_whole_archive = False
-  for a in args:
-    if a.startswith('-'):
-      if a in ['--start-group', '-(']:
-        assert current_archive_group is None, 'Nested --start-group, missing --end-group?'
-        current_archive_group = []
-      elif a in ['--end-group', '-)']:
-        assert current_archive_group is not None, '--end-group without --start-group'
-        scan_archive_group(current_archive_group)
-        current_archive_group = None
-      elif a in ['--whole-archive', '-whole-archive']:
-        in_whole_archive = True
-      elif a in ['--no-whole-archive', '-no-whole-archive']:
-        in_whole_archive = False
-      else:
-        # Command line flags should already be vetted by the time this method
-        # is called, so this is an internal error
-        exit_with_error('unsupported link flag: %s', a)
-    else:
-      lib_path = make_paths_absolute(a)
-      if is_ar(lib_path):
-        # Extract object files from ar archives, and link according to gnu ld semantics
-        # (link in an entire .o from the archive if it supplies symbols still unresolved)
-        consider_archive(lib_path, in_whole_archive or force_add_all)
-        # If we're inside a --start-group/--end-group section, add to the list
-        # so we can loop back around later.
-        if current_archive_group is not None:
-          current_archive_group.append(lib_path)
-      elif is_bitcode(lib_path):
-        if has_ar:
-          consider_object(a, force_add=True)
-        else:
-          # If there are no archives then we can simply link all valid object
-          # files and skip the symbol table stuff.
-          files_to_link.append(a)
-      else:
-        exit_with_error('unknown file type: %s', a)
-
-  # We have to consider the possibility that --start-group was used without a matching
-  # --end-group; GNU ld permits this behavior and implicitly treats the end of the
-  # command line as having an --end-group.
-  if current_archive_group:
-    logger.debug('--start-group without matching --end-group, rescanning')
-    scan_archive_group(current_archive_group)
-    current_archive_group = None
-
-  try_delete(target)
-
-  # Finish link
-  # tolerate people trying to link a.so a.so etc.
-  files_to_link = unique_ordered(files_to_link)
-
-  logger.debug('emcc: linking: %s to %s', files_to_link, target)
-  link_llvm(files_to_link, target)
-
-
 def get_command_with_possible_response_file(cmd):
+  # One of None, 0 or 1. (None: do default decision, 0: force disable, 1: force enable)
+  force_response_files = os.getenv('EM_FORCE_RESPONSE_FILES')
+
   # 8k is a bit of an arbitrary limit, but a reasonable one
   # for max command line size before we use a response file
-  if len(' '.join(cmd)) <= 8192:
+  if (len(shared.shlex_join(cmd)) <= 8192 and force_response_files != '1') or force_response_files == '0':
     return cmd
 
   logger.debug('using response file for %s' % cmd[0])
-  filename = response_file.create_response_file(cmd[1:], TEMP_DIR)
+  filename = response_file.create_response_file(cmd[1:], shared.TEMP_DIR)
   new_cmd = [cmd[0], "@" + filename]
   return new_cmd
 
 
-def parse_symbols(output):
-  defs = []
-  undefs = []
-  commons = []
+# Parses the output of llnm-nm and returns a dictionary of symbols for each file in the output.
+# This function can be called either for a single file output listing ("llvm-nm a.o", or for
+# multiple files listing ("llvm-nm a.o b.o").
+def parse_llvm_nm_symbols(output):
+  # If response files are used in a call to llvm-nm, the output printed by llvm-nm has a
+  # quirk that it will contain double backslashes as directory separators on Windows. (it will
+  # not remove the escape characters when printing)
+  # Therefore canonicalize the output to single backslashes.
+  output = output.replace('\\\\', '\\')
+
+  # a dictionary from 'filename' -> { 'defs': set(), 'undefs': set(), 'commons': set() }
+  symbols = {}
+
   for line in output.split('\n'):
-    if not line or line[0] == '#':
+    # Line format: "[archive filename:]object filename: address status name"
+    entry_pos = line.rfind(':')
+    if entry_pos < 0:
       continue
-    # e.g.  filename.o:  , saying which file it's from
-    if ':' in line:
-      continue
-    parts = [seg for seg in line.split(' ') if len(seg)]
-    # pnacl-nm will print zero offsets for bitcode, and newer llvm-nm will print present symbols
-    # as  -------- T name
-    if len(parts) == 3 and parts[0] == "--------" or re.match(r'^[\da-f]{8}$', parts[0]):
-      parts.pop(0)
-    if len(parts) == 2:
-      # ignore lines with absolute offsets, these are not bitcode anyhow
-      # e.g. |00000630 t d_source_name|
-      status, symbol = parts
-      if status == 'U':
-        undefs.append(symbol)
-      elif status == 'C':
-        commons.append(symbol)
-      elif status == status.upper():
-        # FIXME: using WTD in the previous line fails due to llvm-nm behavior on macOS,
-        #        so for now we assume all uppercase are normally defined external symbols
-        defs.append(symbol)
-  return ObjectFileInfo(0, None, set(defs), set(undefs), set(commons))
+
+    filename_pos = line.rfind(':', 0, entry_pos)
+    # Disambiguate between
+    #   C:\bar.o: T main
+    # and
+    #   /foo.a:bar.o: T main
+    # (both of these have same number of ':'s, but in the first, the file name on disk is "C:\bar.o", in second, it is "/foo.a")
+    if filename_pos < 0 or line[filename_pos + 1] in '/\\':
+      filename_pos = entry_pos
+
+    filename = line[:filename_pos]
+    if entry_pos + 13 >= len(line):
+      exit_with_error('error parsing output of llvm-nm: `%s`\nIf the symbol name here contains a colon, and starts with __invoke_, then the object file was likely built with an old version of llvm (please rebuild it).' % line)
+
+    status = line[entry_pos + 11] # Skip address, which is always fixed-length 8 chars.
+    symbol = line[entry_pos + 13:]
+
+    if filename not in symbols:
+      record = symbols.setdefault(filename, {
+        'defs': set(),
+        'undefs': set(),
+        'commons': set(),
+        'parse_error': False
+      })
+    if status == 'U':
+      record['undefs'] |= {symbol}
+    elif status == 'C':
+      record['commons'] |= {symbol}
+    elif status == status.upper():
+      record['defs'] |= {symbol}
+  return symbols
 
 
 def emar(action, output_filename, filenames, stdout=None, stderr=None, env=None):
-  try_delete(output_filename)
-  response_filename = response_file.create_response_file(filenames, TEMP_DIR)
-  cmd = [EMAR, action, output_filename] + ['@' + response_filename]
-  try:
-    run_process(cmd, stdout=stdout, stderr=stderr, env=env)
-  finally:
-    try_delete(response_filename)
+  utils.delete_file(output_filename)
+  cmd = [EMAR, action, output_filename] + filenames
+  cmd = get_command_with_possible_response_file(cmd)
+  run_process(cmd, stdout=stdout, stderr=stderr, env=env)
 
   if 'c' in action:
     assert os.path.exists(output_filename), 'emar could not create output file: ' + output_filename
@@ -686,11 +368,11 @@ def js_optimizer(filename, passes):
 
 # run JS optimizer on some JS, ignoring asm.js contents if any - just run on it all
 def acorn_optimizer(filename, passes, extra_info=None, return_output=False):
-  optimizer = path_from_root('tools', 'acorn-optimizer.js')
+  optimizer = path_from_root('tools/acorn-optimizer.js')
   original_filename = filename
   if extra_info is not None:
-    temp_files = configuration.get_temp_files()
-    temp = temp_files.get('.js').name
+    temp_files = shared.get_temp_files()
+    temp = temp_files.get('.js', prefix='emcc_acorn_info_').name
     shutil.copyfile(filename, temp)
     with open(temp, 'a') as f:
       f.write('// EXTRA_INFO: ' + extra_info)
@@ -700,34 +382,85 @@ def acorn_optimizer(filename, passes, extra_info=None, return_output=False):
   # will be carried over to a later Closure run.
   if settings.USE_CLOSURE_COMPILER:
     cmd += ['--closureFriendly']
+  if settings.EXPORT_ES6:
+    cmd += ['--exportES6']
   if settings.VERBOSE:
     cmd += ['verbose']
-  if not return_output:
-    next = original_filename + '.jso.js'
-    configuration.get_temp_files().note(next)
-    check_call(cmd, stdout=open(next, 'w'))
-    save_intermediate(next, '%s.js' % passes[0])
-    return next
-  output = check_call(cmd, stdout=PIPE).stdout
-  return output
+  if return_output:
+    return check_call(cmd, stdout=PIPE).stdout
+
+  acorn_optimizer.counter += 1
+  basename = shared.unsuffixed(original_filename)
+  if '.jso' in basename:
+    basename = shared.unsuffixed(basename)
+  output_file = basename + '.jso%d.js' % acorn_optimizer.counter
+  shared.get_temp_files().note(output_file)
+  cmd += ['-o', output_file]
+  check_call(cmd)
+  save_intermediate(output_file, '%s.js' % passes[0])
+  return output_file
+
+
+acorn_optimizer.counter = 0
+
+WASM_CALL_CTORS = '__wasm_call_ctors'
 
 
 # evals ctors. if binaryen_bin is provided, it is the dir of the binaryen tool
 # for this, and we are in wasm mode
-def eval_ctors(js_file, binary_file, debug_info=False): # noqa
-  logger.debug('Ctor evalling in the wasm backend is disabled due to https://github.com/emscripten-core/emscripten/issues/9527')
-  return
-  # TODO re-enable
-  # cmd = [PYTHON, path_from_root('tools', 'ctor_evaller.py'), js_file, binary_file, str(settings.INITIAL_MEMORY), str(settings.TOTAL_STACK), str(settings.GLOBAL_BASE), binaryen_bin, str(int(debug_info))]
-  # if binaryen_bin:
-  #   cmd += get_binaryen_feature_flags()
-  # check_call(cmd)
+def eval_ctors(js_file, wasm_file, debug_info):
+  if settings.MINIMAL_RUNTIME:
+    CTOR_ADD_PATTERN = f"asm['{WASM_CALL_CTORS}']();" # TODO test
+  else:
+    CTOR_ADD_PATTERN = f"addOnInit(Module['asm']['{WASM_CALL_CTORS}']);"
+
+  js = utils.read_file(js_file)
+
+  has_wasm_call_ctors = False
+
+  # eval the ctor caller as well as main, or, in standalone mode, the proper
+  # entry/init function
+  if not settings.STANDALONE_WASM:
+    ctors = []
+    kept_ctors = []
+    has_wasm_call_ctors = CTOR_ADD_PATTERN in js
+    if has_wasm_call_ctors:
+      ctors += [WASM_CALL_CTORS]
+    if settings.HAS_MAIN:
+      main = 'main'
+      if '__main_argc_argv' in settings.WASM_EXPORTS:
+        main = '__main_argc_argv'
+      ctors += [main]
+      # TODO perhaps remove the call to main from the JS? or is this an abi
+      #      we want to preserve?
+      kept_ctors += [main]
+    if not ctors:
+      logger.info('ctor_evaller: no ctors')
+      return
+    args = ['--ctors=' + ','.join(ctors)]
+    if kept_ctors:
+      args += ['--kept-exports=' + ','.join(kept_ctors)]
+  else:
+    if settings.EXPECT_MAIN:
+      ctor = '_start'
+    else:
+      ctor = '_initialize'
+    args = ['--ctors=' + ctor, '--kept-exports=' + ctor]
+  if settings.EVAL_CTORS == 2:
+    args += ['--ignore-external-input']
+  logger.info('ctor_evaller: trying to eval global ctors (' + ' '.join(args) + ')')
+  out = run_binaryen_command('wasm-ctor-eval', wasm_file, wasm_file, args=args, stdout=PIPE, debug=debug_info)
+  logger.info('\n\n' + out)
+  num_successful = out.count('success on')
+  if num_successful and has_wasm_call_ctors:
+    js = js.replace(CTOR_ADD_PATTERN, '')
+  utils.write_file(js_file, js)
 
 
 def get_closure_compiler():
   # First check if the user configured a specific CLOSURE_COMPILER in thier settings
   if config.CLOSURE_COMPILER:
-    return shared.CLOSURE_COMPILER
+    return config.CLOSURE_COMPILER
 
   # Otherwise use the one installed vai npm
   cmd = shared.get_npm_cmd('google-closure-compiler')
@@ -740,43 +473,38 @@ def get_closure_compiler():
 
 
 def check_closure_compiler(cmd, args, env, allowed_to_fail):
+  cmd = cmd + args + ['--version']
   try:
-    output = run_process(cmd + args + ['--version'], stdout=PIPE, env=env).stdout
+    output = run_process(cmd, stdout=PIPE, env=env).stdout
   except Exception as e:
     if allowed_to_fail:
       return False
-    logger.warn(str(e))
-    exit_with_error('closure compiler ("%s --version") did not execute properly!' % str(cmd))
+    if isinstance(e, subprocess.CalledProcessError):
+      sys.stderr.write(e.stdout)
+    sys.stderr.write(str(e) + '\n')
+    exit_with_error('closure compiler (%s) did not execute properly!' % shared.shlex_join(cmd))
 
   if 'Version:' not in output:
     if allowed_to_fail:
       return False
-    exit_with_error('unrecognized closure compiler --version output (%s):\n%s' % (str(cmd), output))
+    exit_with_error('unrecognized closure compiler --version output (%s):\n%s' % (shared.shlex_join(cmd), output))
 
   return True
 
 
-@ToolchainProfiler.profile_block('closure_compiler')
-def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
+# Remove this once we require python3.7 and can use std.isascii.
+# See: https://docs.python.org/3/library/stdtypes.html#str.isascii
+def isascii(s):
+  try:
+    s.encode('ascii')
+  except UnicodeEncodeError:
+    return False
+  else:
+    return True
+
+
+def get_closure_compiler_and_env(user_args):
   env = shared.env_with_node_in_path()
-  user_args = []
-  env_args = os.environ.get('EMCC_CLOSURE_ARGS')
-  if env_args:
-    user_args += shlex.split(env_args)
-  if extra_closure_args:
-    user_args += extra_closure_args
-
-  # Closure compiler expects JAVA_HOME to be set *and* java.exe to be in the PATH in order
-  # to enable use the java backend.  Without this it will only try the native and JavaScript
-  # versions of the compiler.
-  java_bin = os.path.dirname(config.JAVA)
-  if java_bin:
-    def add_to_path(dirname):
-      env['PATH'] = env['PATH'] + os.pathsep + dirname
-    add_to_path(java_bin)
-    java_home = os.path.dirname(java_bin)
-    env.setdefault('JAVA_HOME', java_home)
-
   closure_cmd = get_closure_compiler()
 
   native_closure_compiler_works = check_closure_compiler(closure_cmd, user_args, env, allowed_to_fail=True)
@@ -785,9 +513,44 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
     user_args.append('--platform=java')
     check_closure_compiler(closure_cmd, user_args, env, allowed_to_fail=False)
 
+  if config.JAVA and '--platform=java' in user_args:
+    # Closure compiler expects JAVA_HOME to be set *and* java.exe to be in the PATH in order
+    # to enable use the java backend.  Without this it will only try the native and JavaScript
+    # versions of the compiler.
+    java_bin = os.path.dirname(config.JAVA)
+    if java_bin:
+      def add_to_path(dirname):
+        env['PATH'] = env['PATH'] + os.pathsep + dirname
+      add_to_path(java_bin)
+      java_home = os.path.dirname(java_bin)
+      env.setdefault('JAVA_HOME', java_home)
+
+  return closure_cmd, env
+
+
+@ToolchainProfiler.profile()
+def closure_transpile(filename, pretty):
+  user_args = []
+  closure_cmd, env = get_closure_compiler_and_env(user_args)
+  closure_cmd += ['--language_out', 'ES5']
+  closure_cmd += ['--compilation_level', 'WHITESPACE_ONLY']
+  return run_closure_cmd(closure_cmd, filename, env, pretty)
+
+
+@ToolchainProfiler.profile()
+def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
+  user_args = []
+  env_args = os.environ.get('EMCC_CLOSURE_ARGS')
+  if env_args:
+    user_args += shlex.split(env_args)
+  if extra_closure_args:
+    user_args += extra_closure_args
+
+  closure_cmd, env = get_closure_compiler_and_env(user_args)
+
   # Closure externs file contains known symbols to be extern to the minification, Closure
   # should not minify these symbol names.
-  CLOSURE_EXTERNS = [path_from_root('src', 'closure-externs', 'closure-externs.js')]
+  CLOSURE_EXTERNS = [path_from_root('src/closure-externs/closure-externs.js')]
 
   # Closure compiler needs to know about all exports that come from the wasm module, because to optimize for small code size,
   # the exported symbols are added to global scope via a foreach loop in a way that evades Closure's static analysis. With an explicit
@@ -795,7 +558,7 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
   if settings.WASM_FUNCTION_EXPORTS and not settings.DECLARE_ASM_MODULE_EXPORTS:
     # Generate an exports file that records all the exported symbols from the wasm module.
     module_exports_suppressions = '\n'.join(['/**\n * @suppress {duplicate, undefinedVars}\n */\nvar %s;\n' % asmjs_mangle(i) for i in settings.WASM_FUNCTION_EXPORTS])
-    exports_file = configuration.get_temp_files().get('_module_exports.js')
+    exports_file = shared.get_temp_files().get('.js', prefix='emcc_module_exports_')
     exports_file.write(module_exports_suppressions.encode())
     exports_file.close()
 
@@ -803,29 +566,32 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
 
   # Node.js specific externs
   if shared.target_environment_may_be('node'):
-    NODE_EXTERNS_BASE = path_from_root('third_party', 'closure-compiler', 'node-externs')
+    NODE_EXTERNS_BASE = path_from_root('third_party/closure-compiler/node-externs')
     NODE_EXTERNS = os.listdir(NODE_EXTERNS_BASE)
     NODE_EXTERNS = [os.path.join(NODE_EXTERNS_BASE, name) for name in NODE_EXTERNS
                     if name.endswith('.js')]
-    CLOSURE_EXTERNS += [path_from_root('src', 'closure-externs', 'node-externs.js')] + NODE_EXTERNS
+    CLOSURE_EXTERNS += [path_from_root('src/closure-externs/node-externs.js')] + NODE_EXTERNS
 
   # V8/SpiderMonkey shell specific externs
   if shared.target_environment_may_be('shell'):
-    V8_EXTERNS = [path_from_root('src', 'closure-externs', 'v8-externs.js')]
-    SPIDERMONKEY_EXTERNS = [path_from_root('src', 'closure-externs', 'spidermonkey-externs.js')]
+    V8_EXTERNS = [path_from_root('src/closure-externs/v8-externs.js')]
+    SPIDERMONKEY_EXTERNS = [path_from_root('src/closure-externs/spidermonkey-externs.js')]
     CLOSURE_EXTERNS += V8_EXTERNS + SPIDERMONKEY_EXTERNS
 
   # Web environment specific externs
   if shared.target_environment_may_be('web') or shared.target_environment_may_be('worker'):
-    BROWSER_EXTERNS_BASE = path_from_root('src', 'closure-externs', 'browser-externs')
+    BROWSER_EXTERNS_BASE = path_from_root('src/closure-externs/browser-externs')
     if os.path.isdir(BROWSER_EXTERNS_BASE):
       BROWSER_EXTERNS = os.listdir(BROWSER_EXTERNS_BASE)
       BROWSER_EXTERNS = [os.path.join(BROWSER_EXTERNS_BASE, name) for name in BROWSER_EXTERNS
                          if name.endswith('.js')]
       CLOSURE_EXTERNS += BROWSER_EXTERNS
 
-  if settings.MINIMAL_RUNTIME and settings.USE_PTHREADS and not settings.MODULARIZE:
-    CLOSURE_EXTERNS += [path_from_root('src', 'minimal_runtime_worker_externs.js')]
+  if settings.DYNCALLS:
+    CLOSURE_EXTERNS += [path_from_root('src/closure-externs/dyncall-externs.js')]
+
+  if settings.MINIMAL_RUNTIME and settings.USE_PTHREADS:
+    CLOSURE_EXTERNS += [path_from_root('src/closure-externs/minimal_runtime_worker_externs.js')]
 
   args = ['--compilation_level', 'ADVANCED_OPTIMIZATIONS' if advanced else 'SIMPLE_OPTIMIZATIONS']
   # Keep in sync with ecmaVersion in tools/acorn-optimizer.js
@@ -833,38 +599,57 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
   # Tell closure not to do any transpiling or inject any polyfills.
   # At some point we may want to look into using this as way to convert to ES5 but
   # babel is perhaps a better tool for that.
-  args += ['--language_out', 'NO_TRANSPILE']
+  if settings.TRANSPILE_TO_ES5:
+    args += ['--language_out', 'ES5']
+  else:
+    args += ['--language_out', 'NO_TRANSPILE']
   # Tell closure never to inject the 'use strict' directive.
   args += ['--emit_use_strict=false']
 
+  if settings.IGNORE_CLOSURE_COMPILER_ERRORS:
+    args.append('--jscomp_off=*')
+  # Specify input file relative to the temp directory to avoid specifying non-7-bit-ASCII path names.
+  for e in CLOSURE_EXTERNS:
+    args += ['--externs', e]
+  args += user_args
+
+  cmd = closure_cmd + args
+  return run_closure_cmd(cmd, filename, env, pretty=pretty)
+
+
+def run_closure_cmd(cmd, filename, env, pretty):
+  cmd += ['--js', filename]
+
   # Closure compiler is unable to deal with path names that are not 7-bit ASCII:
   # https://github.com/google/closure-compiler/issues/3784
-  tempfiles = configuration.get_temp_files()
-  outfile = tempfiles.get('.cc.js').name  # Safe 7-bit filename
+  tempfiles = shared.get_temp_files()
 
   def move_to_safe_7bit_ascii_filename(filename):
+    if isascii(filename):
+      return os.path.abspath(filename)
     safe_filename = tempfiles.get('.js').name  # Safe 7-bit filename
     shutil.copyfile(filename, safe_filename)
     return os.path.relpath(safe_filename, tempfiles.tmpdir)
 
-  for e in CLOSURE_EXTERNS:
-    args += ['--externs', move_to_safe_7bit_ascii_filename(e)]
+  for i in range(len(cmd)):
+    for prefix in ('--externs', '--js'):
+      # Handle the case where the the flag and the value are two separate arguments.
+      if cmd[i] == prefix:
+        cmd[i + 1] = move_to_safe_7bit_ascii_filename(cmd[i + 1])
+      # and the case where they are one argument, e.g. --externs=foo.js
+      elif cmd[i].startswith(prefix + '='):
+        # Replace the argument with a version that has a safe filename.
+        filename = cmd[i].split('=', 1)[1]
+        cmd[i] = '='.join([prefix, move_to_safe_7bit_ascii_filename(filename)])
 
-  for i in range(len(user_args)):
-    if user_args[i] == '--externs':
-      user_args[i + 1] = move_to_safe_7bit_ascii_filename(user_args[i + 1])
+  outfile = tempfiles.get('.cc.js').name  # Safe 7-bit filename
 
   # Specify output file relative to the temp directory to avoid specifying non-7-bit-ASCII path names.
-  args += ['--js_output_file', os.path.relpath(outfile, tempfiles.tmpdir)]
-
-  if settings.IGNORE_CLOSURE_COMPILER_ERRORS:
-    args.append('--jscomp_off=*')
+  cmd += ['--js_output_file', os.path.relpath(outfile, tempfiles.tmpdir)]
   if pretty:
-    args += ['--formatting', 'PRETTY_PRINT']
-  # Specify input file relative to the temp directory to avoid specifying non-7-bit-ASCII path names.
-  args += ['--js', move_to_safe_7bit_ascii_filename(filename)]
-  cmd = closure_cmd + args + user_args
-  logger.debug('closure compiler: ' + ' '.join(cmd))
+    cmd += ['--formatting', 'PRETTY_PRINT']
+
+  shared.print_compiler_stage(cmd)
 
   # Closure compiler does not work if any of the input files contain characters outside the
   # 7-bit ASCII range. Therefore make sure the command line we pass does not contain any such
@@ -877,19 +662,21 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
   # But it looks like it creates such files on Linux(?) even without setting that command line
   # flag (and currently we don't), so delete the produced source map file to not leak files in
   # temp directory.
-  try_delete(outfile + '.map')
+  utils.delete_file(outfile + '.map')
+
+  closure_warnings = diagnostics.manager.warnings['closure']
 
   # Print Closure diagnostics result up front.
   if proc.returncode != 0:
     logger.error('Closure compiler run failed:\n')
-  elif len(proc.stderr.strip()) > 0:
-    if settings.CLOSURE_WARNINGS == 'error':
-      logger.error('Closure compiler completed with warnings and -s CLOSURE_WARNINGS=error enabled, aborting!\n')
-    elif settings.CLOSURE_WARNINGS == 'warn':
+  elif len(proc.stderr.strip()) > 0 and closure_warnings['enabled']:
+    if closure_warnings['error']:
+      logger.error('Closure compiler completed with warnings and -Werror=closure enabled, aborting!\n')
+    else:
       logger.warn('Closure compiler completed with warnings:\n')
 
   # Print input file (long wall of text!)
-  if DEBUG == 2 and (proc.returncode != 0 or (len(proc.stderr.strip()) > 0 and settings.CLOSURE_WARNINGS != 'quiet')):
+  if DEBUG == 2 and (proc.returncode != 0 or (len(proc.stderr.strip()) > 0 and closure_warnings['enabled'])):
     input_file = open(filename, 'r').read().splitlines()
     for i in range(len(input_file)):
       sys.stderr.write(f'{i + 1}: {input_file[i]}\n')
@@ -898,14 +685,14 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
     logger.error(proc.stderr) # print list of errors (possibly long wall of text if input was minified)
 
     # Exit and print final hint to get clearer output
-    msg = 'closure compiler failed (rc: %d): %s' % (proc.returncode, shared.shlex_join(cmd))
+    msg = f'closure compiler failed (rc: {proc.returncode}): {shared.shlex_join(cmd)}'
     if not pretty:
       msg += ' the error message may be clearer with -g1 and EMCC_DEBUG=2 set'
     exit_with_error(msg)
 
-  if len(proc.stderr.strip()) > 0 and settings.CLOSURE_WARNINGS != 'quiet':
+  if len(proc.stderr.strip()) > 0 and closure_warnings['enabled']:
     # print list of warnings (possibly long wall of text if input was minified)
-    if settings.CLOSURE_WARNINGS == 'error':
+    if closure_warnings['error']:
       logger.error(proc.stderr)
     else:
       logger.warn(proc.stderr)
@@ -916,8 +703,8 @@ def closure_compiler(filename, pretty, advanced=True, extra_closure_args=None):
     elif DEBUG != 2:
       logger.warn('(rerun with EMCC_DEBUG=2 enabled to dump Closure input file)')
 
-    if settings.CLOSURE_WARNINGS == 'error':
-      exit_with_error('closure compiler produced warnings and -s CLOSURE_WARNINGS=error enabled')
+    if closure_warnings['error']:
+      exit_with_error('closure compiler produced warnings and -W=error=closure enabled')
 
   return outfile
 
@@ -958,7 +745,7 @@ def minify_wasm_js(js_file, wasm_file, expensive_optimizations, minify_whitespac
 # run binaryen's wasm-metadce to dce both js and wasm
 def metadce(js_file, wasm_file, minify_whitespace, debug_info):
   logger.debug('running meta-DCE')
-  temp_files = configuration.get_temp_files()
+  temp_files = shared.get_temp_files()
   # first, get the JS part of the graph
   if settings.MAIN_MODULE:
     # For the main module we include all exports as possible roots, not just function exports.
@@ -971,6 +758,7 @@ def metadce(js_file, wasm_file, minify_whitespace, debug_info):
     exports = settings.WASM_EXPORTS
   else:
     exports = settings.WASM_FUNCTION_EXPORTS
+
   extra_info = '{ "exports": [' + ','.join(f'["{asmjs_mangle(x)}", "{x}"]' for x in exports) + ']}'
 
   txt = acorn_optimizer(js_file, ['emitDCEGraph', 'noPrint'], return_output=True, extra_info=extra_info)
@@ -998,7 +786,7 @@ def metadce(js_file, wasm_file, minify_whitespace, debug_info):
       'root': True
     })
   # fix wasi imports TODO: support wasm stable with an option?
-  WASI_IMPORTS = set([
+  WASI_IMPORTS = {
     'environ_get',
     'environ_sizes_get',
     'args_get',
@@ -1014,7 +802,7 @@ def metadce(js_file, wasm_file, minify_whitespace, debug_info):
     'proc_exit',
     'clock_res_get',
     'clock_time_get',
-  ])
+  }
   for item in graph:
     if 'import' in item and item['import'][1][1:] in WASI_IMPORTS:
       item['import'][0] = settings.WASI_MODULE_NAME
@@ -1028,10 +816,8 @@ def metadce(js_file, wasm_file, minify_whitespace, debug_info):
   for item in graph:
     if 'import' in item:
       import_name_map[item['name']] = 'emcc$import$' + item['import'][1]
-  temp = temp_files.get('.txt').name
-  txt = json.dumps(graph)
-  with open(temp, 'w') as f:
-    f.write(txt)
+  temp = temp_files.get('.json', prefix='emcc_dce_graph_').name
+  utils.write_file(temp, json.dumps(graph, indent=2))
   # run wasm-metadce
   out = run_binaryen_command('wasm-metadce',
                              wasm_file,
@@ -1130,8 +916,7 @@ def wasm2js(js_file, wasm_file, opt_level, minify_whitespace, use_closure_compil
                                     debug=debug_info,
                                     stdout=PIPE)
   if DEBUG:
-    with open(os.path.join(get_emscripten_temp_dir(), 'wasm2js-output.js'), 'w') as f:
-      f.write(wasm2js_js)
+    utils.write_file(os.path.join(get_emscripten_temp_dir(), 'wasm2js-output.js'), wasm2js_js)
   # JS optimizations
   if opt_level >= 2:
     passes = []
@@ -1150,31 +935,27 @@ def wasm2js(js_file, wasm_file, opt_level, minify_whitespace, use_closure_compil
       wasm2js_js = wasm2js_js.replace('\n function $', '\nfunction $')
       wasm2js_js = wasm2js_js.replace('\n }', '\n}')
       wasm2js_js += '\n// EMSCRIPTEN_GENERATED_FUNCTIONS\n'
-      temp = configuration.get_temp_files().get('.js').name
-      with open(temp, 'w') as f:
-        f.write(wasm2js_js)
+      temp = shared.get_temp_files().get('.js').name
+      utils.write_file(temp, wasm2js_js)
       temp = js_optimizer(temp, passes)
-      with open(temp) as f:
-        wasm2js_js = f.read()
+      wasm2js_js = utils.read_file(temp)
   # Closure compiler: in mode 1, we just minify the shell. In mode 2, we
   # minify the wasm2js output as well, which is ok since it isn't
   # validating asm.js.
   # TODO: in the non-closure case, we could run a lightweight general-
   #       purpose JS minifier here.
   if use_closure_compiler == 2:
-    temp = configuration.get_temp_files().get('.js').name
+    temp = shared.get_temp_files().get('.js').name
     with open(temp, 'a') as f:
       f.write(wasm2js_js)
     temp = closure_compiler(temp, pretty=not minify_whitespace, advanced=False)
-    with open(temp) as f:
-      wasm2js_js = f.read()
+    wasm2js_js = utils.read_file(temp)
     # closure may leave a trailing `;`, which would be invalid given where we place
     # this code (inside parens)
     wasm2js_js = wasm2js_js.strip()
     if wasm2js_js[-1] == ';':
       wasm2js_js = wasm2js_js[:-1]
-  with open(js_file) as f:
-    all_js = f.read()
+  all_js = utils.read_file(js_file)
   # quoted notation, something like Module['__wasm2jsInstantiate__']
   finds = re.findall(r'''[\w\d_$]+\[['"]__wasm2jsInstantiate__['"]\]''', all_js)
   if not finds:
@@ -1185,25 +966,22 @@ def wasm2js(js_file, wasm_file, opt_level, minify_whitespace, use_closure_compil
   all_js = all_js.replace(marker, f'(\n{wasm2js_js}\n)')
   # replace the placeholder with the actual code
   js_file = js_file + '.wasm2js.js'
-  with open(js_file, 'w') as f:
-    f.write(all_js)
+  utils.write_file(js_file, all_js)
   return js_file
 
 
-def strip(infile, outfile, debug=False, producers=False):
+def strip(infile, outfile, debug=False, sections=None):
   cmd = [LLVM_OBJCOPY, infile, outfile]
   if debug:
     cmd += ['--remove-section=.debug*']
-  if producers:
-    cmd += ['--remove-section=producers']
+  if sections:
+    cmd += ['--remove-section=' + section for section in sections]
   check_call(cmd)
 
 
 # extract the DWARF info from the main file, and leave the wasm with
 # debug into as a file on the side
-# TODO: emit only debug sections in the side file, and not the entire
-#       wasm as well
-def emit_debug_on_side(wasm_file, wasm_file_with_dwarf):
+def emit_debug_on_side(wasm_file):
   # if the dwarf filename wasn't provided, use the default target + a suffix
   wasm_file_with_dwarf = settings.SEPARATE_DWARF
   if wasm_file_with_dwarf is True:
@@ -1219,15 +997,25 @@ def emit_debug_on_side(wasm_file, wasm_file_with_dwarf):
   shutil.move(wasm_file, wasm_file_with_dwarf)
   strip(wasm_file_with_dwarf, wasm_file, debug=True)
 
+  # Strip code and data from the debug file to limit its size. The other known
+  # sections are still required to correctly interpret the DWARF info.
+  # TODO(dschuff): Also strip the DATA section? To make this work we'd need to
+  # either allow "invalid" data segment name entries, or maybe convert the DATA
+  # to a DATACOUNT section.
+  # TODO(https://github.com/emscripten-core/emscripten/issues/13084): Re-enable
+  # this code once the debugger extension can handle wasm files with name
+  # sections but no code sections.
+  # strip(wasm_file_with_dwarf, wasm_file_with_dwarf, sections=['CODE'])
+
   # embed a section in the main wasm to point to the file with external DWARF,
   # see https://yurydelendik.github.io/webassembly-dwarf/#external-DWARF
   section_name = b'\x13external_debug_info' # section name, including prefixed size
   filename_bytes = embedded_path.encode('utf-8')
-  contents = webassembly.toLEB(len(filename_bytes)) + filename_bytes
+  contents = webassembly.to_leb(len(filename_bytes)) + filename_bytes
   section_size = len(section_name) + len(contents)
   with open(wasm_file, 'ab') as f:
     f.write(b'\0') # user section is code 0
-    f.write(webassembly.toLEB(section_size))
+    f.write(webassembly.to_leb(section_size))
     f.write(section_name)
     f.write(contents)
 
@@ -1241,10 +1029,9 @@ def apply_wasm_memory_growth(js_file):
   logger.debug('supporting wasm memory growth with pthreads')
   fixed = acorn_optimizer(js_file, ['growableHeap'])
   ret = js_file + '.pgrow.js'
-  with open(fixed, 'r') as fixed_f:
-    with open(ret, 'w') as ret_f:
-      with open(path_from_root('src', 'growableHeap.js')) as support_code_f:
-        ret_f.write(support_code_f.read() + '\n' + fixed_f.read())
+  fixed = utils.read_file(fixed)
+  support_code = utils.read_file(path_from_root('src/growableHeap.js'))
+  utils.write_file(ret, support_code + '\n' + fixed)
   return ret
 
 
@@ -1274,11 +1061,9 @@ def handle_final_wasm_symbols(wasm_file, symbols_file, debug_info):
   else:
     # suppress the wasm-opt warning regarding "no output file specified"
     args += ['--quiet']
-  # ignore stderr because if wasm-opt is run without a -o it will warn
   output = run_wasm_opt(wasm_file, args=args, stdout=PIPE)
   if symbols_file:
-    with open(symbols_file, 'w') as f:
-      f.write(output)
+    utils.write_file(symbols_file, output)
 
 
 def is_ar(filename):
@@ -1323,12 +1108,12 @@ def is_wasm_dylib(filename):
   """Detect wasm dynamic libraries by the presence of the "dylink" custom section."""
   if not is_wasm(filename):
     return False
-  module = webassembly.Module(filename)
-  section = next(module.sections())
-  if section.type == webassembly.SecType.CUSTOM:
-    module.seek(section.offset)
-    if module.readString() == 'dylink':
-      return True
+  with webassembly.Module(filename) as module:
+    section = next(module.sections())
+    if section.type == webassembly.SecType.CUSTOM:
+      module.seek(section.offset)
+      if module.read_string() in ('dylink', 'dylink.0'):
+        return True
   return False
 
 
@@ -1342,6 +1127,7 @@ def map_to_js_libs(library_name):
   """
   # Some native libraries are implemented in Emscripten as system side JS libraries
   library_map = {
+    'embind': ['embind/embind.js', 'embind/emval.js'],
     'EGL': ['library_egl.js'],
     'GL': ['library_webgl.js', 'library_html5_webgl.js'],
     'webgl.js': ['library_webgl.js', 'library_html5_webgl.js'],
@@ -1370,6 +1156,7 @@ def map_to_js_libs(library_name):
   }
   # And some are hybrid and require JS and native libraries to be included
   native_library_map = {
+    'embind': 'libembind',
     'GL': 'libGL',
   }
 
@@ -1384,8 +1171,8 @@ def map_to_js_libs(library_name):
   return (None, None)
 
 
-# Map a linker flag to a settings. This lets a user write -lSDL2 and it will have the same effect as
-# -s USE_SDL=2.
+# Map a linker flag to a settings. This lets a user write -lSDL2 and it will
+# have the same effect as -sUSE_SDL=2.
 def map_and_apply_to_settings(library_name):
   # most libraries just work, because the -l name matches the name of the
   # library we build. however, if a library has variations, which cause us to
@@ -1408,7 +1195,7 @@ def emit_wasm_source_map(wasm_file, map_file, final_wasm):
   # source file paths must be relative to the location of the map (which is
   # emitted alongside the wasm)
   base_path = os.path.dirname(os.path.abspath(final_wasm))
-  sourcemap_cmd = [PYTHON, path_from_root('tools', 'wasm-sourcemap.py'),
+  sourcemap_cmd = [sys.executable, '-E', path_from_root('tools/wasm-sourcemap.py'),
                    wasm_file,
                    '--dwarfdump=' + LLVM_DWARFDUMP,
                    '-o',  map_file,
@@ -1461,24 +1248,10 @@ def get_binaryen_bin():
 binaryen_kept_debug_info = False
 
 
-def run_binaryen_command(tool, infile, outfile=None, args=[], debug=False, stdout=None):
+def run_binaryen_command(tool, infile, outfile=None, args=None, debug=False, stdout=None):
   cmd = [os.path.join(get_binaryen_bin(), tool)]
-  if outfile and tool == 'wasm-opt' and \
-     (settings.DEBUG_LEVEL < 3 or settings.GENERATE_SOURCE_MAP):
-    # remove any dwarf debug info sections, if the debug level is <3, as
-    # we don't need them; also remove them if we use source maps (which are
-    # implemented separately from dwarf).
-    # note that we add this pass first, so that it doesn't interfere with
-    # the final set of passes (which may generate stack IR, and nothing
-    # should be run after that)
-    # TODO: if lld can strip dwarf then we don't need this. atm though it can
-    #       only strip all debug info or none, which includes the name section
-    #       which we may need
-    # TODO: once fastcomp is gone, either remove source maps entirely, or
-    #       support them by emitting a source map at the end from the dwarf,
-    #       and use llvm-objcopy to remove that final dwarf
-    cmd += ['--strip-dwarf']
-  cmd += args
+  if args:
+    cmd += args
   if infile:
     cmd += [infile]
   if outfile:
@@ -1490,7 +1263,7 @@ def run_binaryen_command(tool, infile, outfile=None, args=[], debug=False, stdou
       # legalization. show a clear error for those (as the flags the user passed
       # in are not enough to see what went wrong)
       if settings.LEGALIZE_JS_FFI:
-        extra += '\nnote: to disable int64 legalization (which requires changes after link) use -s WASM_BIGINT'
+        extra += '\nnote: to disable int64 legalization (which requires changes after link) use -sWASM_BIGINT'
       if settings.OPT_LEVEL > 0:
         extra += '\nnote: -O2+ optimizations always require changes, build with -O0 or -O1 instead'
       exit_with_error(f'changes to the wasm are required after link, but disallowed by ERROR_ON_WASM_CHANGES_AFTER_LINK: {cmd}{extra}')
@@ -1500,7 +1273,9 @@ def run_binaryen_command(tool, infile, outfile=None, args=[], debug=False, stdou
   cmd += get_binaryen_feature_flags()
   # if we are emitting a source map, every time we load and save the wasm
   # we must tell binaryen to update it
-  if settings.GENERATE_SOURCE_MAP and outfile:
+  # TODO: all tools should support source maps; wasm-ctor-eval does not atm,
+  #       for example
+  if settings.GENERATE_SOURCE_MAP and outfile and tool in ['wasm-opt', 'wasm-emscripten-finalize']:
     cmd += [f'--input-source-map={infile}.map']
     cmd += [f'--output-source-map={outfile}.map']
   ret = check_call(cmd, stdout=stdout).stdout
@@ -1511,18 +1286,44 @@ def run_binaryen_command(tool, infile, outfile=None, args=[], debug=False, stdou
   return ret
 
 
-def run_wasm_opt(*args, **kwargs):
-  return run_binaryen_command('wasm-opt', *args, **kwargs)
-
-
-save_intermediate_counter = 0
+def run_wasm_opt(infile, outfile=None, args=[], **kwargs):  # noqa
+  if outfile and not settings.GENERATE_DWARF:
+    # remove any dwarf debug info sections if dwarf is not requested.
+    # note that we add this pass first, so that it doesn't interfere with
+    # the final set of passes (which may generate stack IR, and nothing
+    # should be run after that)
+    # TODO: if lld can strip dwarf then we don't need this. atm though it can
+    #       only strip all debug info or none, which includes the name section
+    #       which we may need
+    # TODO: once fastcomp is gone, either remove source maps entirely, or
+    #       support them by emitting a source map at the end from the dwarf,
+    #       and use llvm-objcopy to remove that final dwarf
+    args.insert(0, '--strip-dwarf')
+  return run_binaryen_command('wasm-opt', infile, outfile, args=args, **kwargs)
 
 
 def save_intermediate(src, dst):
   if DEBUG:
-    global save_intermediate_counter
-    dst = 'emcc-%d-%s' % (save_intermediate_counter, dst)
-    save_intermediate_counter += 1
-    dst = os.path.join(CANONICAL_TEMP_DIR, dst)
+    dst = 'emcc-%d-%s' % (save_intermediate.counter, dst)
+    save_intermediate.counter += 1
+    dst = os.path.join(shared.CANONICAL_TEMP_DIR, dst)
     logger.debug('saving debug copy %s' % dst)
     shutil.copyfile(src, dst)
+
+
+save_intermediate.counter = 0
+
+
+def js_legalization_pass_flags():
+  flags = []
+  if settings.RELOCATABLE:
+    # When builing in relocatable mode, we also want access the original
+    # non-legalized wasm functions (since wasm modules can and do link to
+    # the original, non-legalized, functions).
+    flags += ['--pass-arg=legalize-js-interface-export-originals']
+  if not settings.SIDE_MODULE:
+    # Unless we are building a side module the helper functions should be
+    # assumed to be defined and exports within the module, otherwise binaryen
+    # assumes they are imports.
+    flags += ['--pass-arg=legalize-js-interface-exported-helpers']
+  return flags

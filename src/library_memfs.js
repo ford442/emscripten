@@ -333,11 +333,7 @@ mergeInto(LibraryManager.library, {
         MEMFS.expandFileStorage(stream.node, offset + length);
         stream.node.usedBytes = Math.max(stream.node.usedBytes, offset + length);
       },
-      mmap: function(stream, address, length, position, prot, flags) {
-        if (address !== 0) {
-          // We don't currently support location hints for the address of the mapping
-          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
-        }
+      mmap: function(stream, length, position, prot, flags) {
         if (!FS.isFile(stream.node.mode)) {
           throw new FS.ErrnoError({{{ cDefine('ENODEV') }}});
         }
@@ -372,15 +368,7 @@ mergeInto(LibraryManager.library, {
         return { ptr: ptr, allocated: allocated };
       },
       msync: function(stream, buffer, offset, length, mmapFlags) {
-        if (!FS.isFile(stream.node.mode)) {
-          throw new FS.ErrnoError({{{ cDefine('ENODEV') }}});
-        }
-        if (mmapFlags & {{{ cDefine('MAP_PRIVATE') }}}) {
-          // MAP_PRIVATE calls need not to be synced back to underlying fs
-          return 0;
-        }
-
-        var bytesWritten = MEMFS.stream_ops.write(stream, buffer, 0, length, offset, false);
+        MEMFS.stream_ops.write(stream, buffer, 0, length, offset, false);
         // should we check if bytesWritten and length are the same?
         return 0;
       }

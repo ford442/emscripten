@@ -13,11 +13,12 @@
 
 #include "lsan.h"
 
-#include "sanitizer_common/sanitizer_flags.h"
-#include "sanitizer_common/sanitizer_flag_parser.h"
 #include "lsan_allocator.h"
 #include "lsan_common.h"
 #include "lsan_thread.h"
+#include "sanitizer_common/sanitizer_flag_parser.h"
+#include "sanitizer_common/sanitizer_flags.h"
+#include "sanitizer_common/sanitizer_interface_internal.h"
 
 #if SANITIZER_EMSCRIPTEN
 extern "C" void emscripten_builtin_free(void *);
@@ -40,18 +41,14 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(
     uptr pc, uptr bp, void *context, bool request_fast, u32 max_depth) {
   using namespace __lsan;
   uptr stack_top = 0, stack_bottom = 0;
-  ThreadContext *t;
-  if (StackTrace::WillUseFastUnwind(request_fast) &&
-      (t = CurrentThreadContext())) {
+  if (ThreadContext *t = CurrentThreadContext()) {
     stack_top = t->stack_end();
     stack_bottom = t->stack_begin();
   }
-  if (!SANITIZER_MIPS || IsValidFrame(bp, stack_top, stack_bottom)) {
-    if (StackTrace::WillUseFastUnwind(request_fast))
-      Unwind(max_depth, pc, bp, nullptr, stack_top, stack_bottom, true);
-    else
-      Unwind(max_depth, pc, 0, context, 0, 0, false);
-  }
+  if (SANITIZER_MIPS && !IsValidFrame(bp, stack_top, stack_bottom))
+    return;
+  bool fast = StackTrace::WillUseFastUnwind(request_fast);
+  Unwind(max_depth, pc, bp, context, stack_top, stack_bottom, fast);
 }
 
 using namespace __lsan;
@@ -85,7 +82,7 @@ static void InitializeFlags() {
   const char *lsan_default_options = __lsan_default_options();
   parser.ParseString(lsan_default_options);
 #if SANITIZER_EMSCRIPTEN
-  char *options = (char*) EM_ASM_INT({
+  char *options = (char*) EM_ASM_PTR({
     return withBuiltinMalloc(function () {
       return allocateUTF8(Module['LSAN_OPTIONS'] || 0);
     });
@@ -130,9 +127,7 @@ extern "C" void __lsan_init() {
   InstallDeadlySignalHandlers(LsanOnDeadlySignal);
 #endif
   InitializeMainThread();
-
-  if (common_flags()->detect_leaks && common_flags()->leak_check_at_exit)
-    Atexit(DoLeakCheck);
+  InstallAtExitCheckLeaks();
 
   InitializeCoverage(common_flags()->coverage, common_flags()->coverage_dir);
 

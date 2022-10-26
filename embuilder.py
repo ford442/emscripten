@@ -16,33 +16,39 @@ import argparse
 import logging
 import sys
 import time
+from contextlib import contextmanager
 
 from tools import shared
 from tools import system_libs
+from tools import ports
 from tools.settings import settings
 import emscripten
 
 
-SYSTEM_LIBRARIES = system_libs.Library.get_all_variations()
-SYSTEM_TASKS = list(SYSTEM_LIBRARIES.keys())
-
-# This is needed to build the generated_struct_info.json file.
-# It is not a system library, but it needs to be built before running with FROZEN_CACHE.
-SYSTEM_TASKS += ['struct_info']
-
-# Minimal subset of SYSTEM_TASKS used by CI systems to build enough to useful
+# Minimal subset of targets used by CI systems to build enough to useful
 MINIMAL_TASKS = [
     'libcompiler_rt',
+    'libcompiler_rt-wasm-sjlj',
     'libc',
+    'libc-debug',
+    'libc_optz',
+    'libc_optz-debug',
     'libc++abi',
     'libc++abi-except',
     'libc++abi-noexcept',
+    'libc++abi-debug',
+    'libc++abi-debug-except',
+    'libc++abi-debug-noexcept',
     'libc++',
     'libc++-except',
     'libc++-noexcept',
     'libal',
     'libdlmalloc',
+    'libdlmalloc-noerrno',
+    'libdlmalloc-tracing',
     'libdlmalloc-debug',
+    'libembind',
+    'libembind-rtti',
     'libemmalloc',
     'libemmalloc-debug',
     'libemmalloc-memvalidate',
@@ -51,88 +57,125 @@ MINIMAL_TASKS = [
     'libGL',
     'libhtml5',
     'libsockets',
-    'libc_rt_wasm',
-    'libc_rt_wasm-optz',
+    'libstubs',
+    'libstubs-debug',
     'struct_info',
     'libstandalonewasm',
     'crt1',
-    'libunwind-except'
+    'crt1_proxy_main',
+    'libunwind-except',
+    'libnoexit',
+    'sqlite3',
+    'sqlite3-mt',
 ]
 
-USER_TASKS = [
-    'boost_headers',
-    'bullet',
-    'bzip2',
-    'cocos2d',
-    'freetype',
-    'giflib',
-    'harfbuzz',
-    'icu',
-    'libjpeg',
-    'libpng',
-    'ogg',
-    'regal',
-    'regal-mt',
-    'sdl2',
-    'sdl2-mt',
-    'sdl2-gfx',
-    'sdl2-image',
-    'sdl2-image-png',
-    'sdl2-image-jpg',
-    'sdl2-mixer',
-    'sdl2-mixer-ogg',
-    'sdl2-mixer-mp3',
-    'sdl2-net',
-    'sdl2-ttf',
-    'vorbis',
-    'zlib',
+# Additional tasks on top of MINIMAL_TASKS that are necessary for PIC testing on
+# CI (which has slightly more tests than other modes that want to use MINIMAL)
+MINIMAL_PIC_TASKS = MINIMAL_TASKS + [
+    'libcompiler_rt-mt',
+    'libc-mt',
+    'libc-mt-debug',
+    'libc_optz-mt',
+    'libc_optz-mt-debug',
+    'libc++abi-mt',
+    'libc++abi-mt-noexcept',
+    'libc++abi-debug-mt',
+    'libc++abi-debug-mt-noexcept',
+    'libc++-mt',
+    'libc++-mt-noexcept',
+    'libdlmalloc-mt',
+    'libGL-emu',
+    'libGL-mt',
+    'libsockets_proxy',
+    'libsockets-mt',
+    'crtbegin',
+    'libsanitizer_common_rt',
+    'libubsan_rt',
+    'libwasm_workers_stub-debug',
+    'libwebgpu_cpp',
+    'libfetch',
+    'libwasmfs',
 ]
 
-temp_files = shared.configuration.get_temp_files()
+PORTS = sorted(list(ports.ports_by_name.keys()) + list(ports.port_variants.keys()))
+
+temp_files = shared.get_temp_files()
 logger = logging.getLogger('embuilder')
-force = False
 legacy_prefixes = {
   'libgl': 'libGL',
 }
 
 
 def get_help():
-  all_tasks = SYSTEM_TASKS + USER_TASKS
+  all_tasks = get_system_tasks()[1] + PORTS
   all_tasks.sort()
   return '''
 Available targets:
 
-  build %s
+  build / clear %s
 
-Issuing 'embuilder.py build ALL' causes each task to be built.
+Issuing 'embuilder build ALL' causes each task to be built.
 ''' % '\n        '.join(all_tasks)
 
 
-def build_port(port_name):
-  if force:
-    system_libs.clear_port(port_name, settings)
+@contextmanager
+def get_port_variant(name):
+  if name in ports.port_variants:
+    name, extra_settings = ports.port_variants[name]
+    old_settings = settings.dict().copy()
+    for key, value in extra_settings.items():
+      setattr(settings, key, value)
+  else:
+    old_settings = None
 
-  system_libs.build_port(port_name, settings)
+  yield name
+
+  if old_settings:
+    settings.dict().update(old_settings)
+
+
+def clear_port(port_name):
+  with get_port_variant(port_name) as port_name:
+    ports.clear_port(port_name, settings)
+
+
+def build_port(port_name):
+  with get_port_variant(port_name) as port_name:
+    ports.build_port(port_name, settings)
+
+
+def get_system_tasks():
+  system_libraries = system_libs.Library.get_all_variations()
+  system_tasks = list(system_libraries.keys())
+  # This is needed to build the generated_struct_info.json file.
+  # It is not a system library, but it needs to be built before
+  # running with FROZEN_CACHE.
+  system_tasks += ['struct_info']
+
+  return system_libraries, system_tasks
 
 
 def main():
-  global force
-
   all_build_start_time = time.time()
 
   parser = argparse.ArgumentParser(description=__doc__,
                                    formatter_class=argparse.RawDescriptionHelpFormatter,
                                    epilog=get_help())
-  parser.add_argument('--lto', action='store_true', help='build bitcode object for LTO')
+  parser.add_argument('--lto', action='store_const', const='full', help='build bitcode object for LTO')
+  parser.add_argument('--lto=thin', dest='lto', action='store_const', const='thin', help='build bitcode object for ThinLTO')
   parser.add_argument('--pic', action='store_true',
                       help='build relocatable objects for suitable for dynamic linking')
   parser.add_argument('--force', action='store_true',
                       help='force rebuild of target (by removing it first)')
-  parser.add_argument('operation', help='currently only "build" is supported')
+  parser.add_argument('--verbose', action='store_true',
+                      help='show build commands')
+  parser.add_argument('--wasm64', action='store_true',
+                      help='use wasm64 architecture')
+  parser.add_argument('operation', help='currently only "build" and "clear" are supported')
   parser.add_argument('targets', nargs='+', help='see below')
   args = parser.parse_args()
 
-  if args.operation != 'build':
+  if args.operation not in ('build', 'clear'):
     shared.exit_with_error('unfamiliar operation: ' + args.operation)
 
   # process flags
@@ -143,32 +186,45 @@ def main():
   shared.check_sanity()
 
   if args.lto:
-    settings.LTO = "full"
+    settings.LTO = args.lto
+
+  if args.verbose:
+    shared.PRINT_STAGES = True
 
   if args.pic:
     settings.RELOCATABLE = 1
 
+  if args.wasm64:
+    settings.MEMORY64 = 2
+    MINIMAL_TASKS[:] = [t for t in MINIMAL_TASKS if 'emmalloc' not in t]
+
+  do_build = args.operation == 'build'
+  do_clear = args.operation == 'clear'
   if args.force:
-    force = True
+    do_clear = True
 
   # process tasks
   auto_tasks = False
   tasks = args.targets
+  system_libraries, system_tasks = get_system_tasks()
   if 'SYSTEM' in tasks:
-    tasks = SYSTEM_TASKS
+    tasks = system_tasks
     auto_tasks = True
   elif 'USER' in tasks:
-    tasks = USER_TASKS
+    tasks = PORTS
     auto_tasks = True
   elif 'MINIMAL' in tasks:
     tasks = MINIMAL_TASKS
     auto_tasks = True
+  elif 'MINIMAL_PIC' in tasks:
+    tasks = MINIMAL_PIC_TASKS
+    auto_tasks = True
   elif 'ALL' in tasks:
-    tasks = SYSTEM_TASKS + USER_TASKS
+    tasks = system_tasks + PORTS
     auto_tasks = True
   if auto_tasks:
-    # cocos2d: must be ported, errors on
-    # "Cannot recognize the target platform; are you targeting an unsupported platform?"
+    # There are some ports that we don't want to build as part
+    # of ALL since the are not well tested or widely used:
     skip_tasks = ['cocos2d']
     tasks = [x for x in tasks if x not in skip_tasks]
     print('Building targets: %s' % ' '.join(tasks))
@@ -176,98 +232,32 @@ def main():
     for old, new in legacy_prefixes.items():
       if what.startswith(old):
         what = what.replace(old, new)
-    logger.info('building and verifying ' + what)
+    if do_build:
+      logger.info('building ' + what)
+    else:
+      logger.info('clearing ' + what)
     start_time = time.time()
-    if what in SYSTEM_LIBRARIES:
-      library = SYSTEM_LIBRARIES[what]
-      if force:
+    if what in system_libraries:
+      library = system_libraries[what]
+      if do_clear:
         library.erase()
-      library.get_path()
+      if do_build:
+        library.build()
     elif what == 'sysroot':
-      if force:
+      if do_clear:
         shared.Cache.erase_file('sysroot_install.stamp')
-      system_libs.ensure_sysroot()
+      if do_build:
+        system_libs.ensure_sysroot()
     elif what == 'struct_info':
-      if force:
-        shared.Cache.erase_file('generated_struct_info.json')
-      emscripten.generate_struct_info()
-    elif what == 'icu':
-      build_port('icu')
-    elif what == 'zlib':
-      settings.USE_ZLIB = 1
-      build_port('zlib')
-      settings.USE_ZLIB = 0
-    elif what == 'bzip2':
-      build_port('bzip2')
-    elif what == 'bullet':
-      build_port('bullet')
-    elif what == 'vorbis':
-      build_port('vorbis')
-    elif what == 'ogg':
-      build_port('ogg')
-    elif what == 'giflib':
-      build_port('giflib')
-    elif what == 'libjpeg':
-      build_port('libjpeg')
-    elif what == 'libpng':
-      build_port('libpng')
-    elif what == 'sdl2':
-      build_port('sdl2')
-    elif what == 'sdl2-mt':
-      settings.USE_PTHREADS = 1
-      build_port('sdl2')
-      settings.USE_PTHREADS = 0
-    elif what == 'sdl2-gfx':
-      build_port('sdl2_gfx')
-    elif what == 'sdl2-image':
-      build_port('sdl2_image')
-    elif what == 'sdl2-image-png':
-      settings.SDL2_IMAGE_FORMATS = ["png"]
-      build_port('sdl2_image')
-      settings.SDL2_IMAGE_FORMATS = []
-    elif what == 'sdl2-image-jpg':
-      settings.SDL2_IMAGE_FORMATS = ["jpg"]
-      build_port('sdl2_image')
-      settings.SDL2_IMAGE_FORMATS = []
-    elif what == 'sdl2-net':
-      build_port('sdl2_net')
-    elif what == 'sdl2-mixer':
-      old_formats = settings.SDL2_MIXER_FORMATS
-      settings.SDL2_MIXER_FORMATS = []
-      build_port('sdl2_mixer')
-      settings.SDL2_MIXER_FORMATS = old_formats
-    elif what == 'sdl2-mixer-ogg':
-      old_formats = settings.SDL2_MIXER_FORMATS
-      settings.SDL2_MIXER_FORMATS = ["ogg"]
-      build_port('sdl2_mixer')
-      settings.SDL2_MIXER_FORMATS = old_formats
-    elif what == 'sdl2-mixer-mp3':
-      old_formats = settings.SDL2_MIXER_FORMATS
-      settings.SDL2_MIXER_FORMATS = ["mp3"]
-      build_port('sdl2_mixer')
-      settings.SDL2_MIXER_FORMATS = old_formats
-    elif what == 'freetype':
-      build_port('freetype')
-    elif what == 'harfbuzz':
-      build_port('harfbuzz')
-    elif what == 'harfbuzz-mt':
-      settings.USE_PTHREADS = 1
-      build_port('harfbuzz')
-      settings.USE_PTHREADS = 0
-    elif what == 'sdl2-ttf':
-      build_port('sdl2_ttf')
-    elif what == 'cocos2d':
-      build_port('cocos2d')
-    elif what == 'regal':
-      build_port('regal')
-    elif what == 'regal-mt':
-      settings.USE_PTHREADS = 1
-      build_port('regal')
-      settings.USE_PTHREADS = 0
-    elif what == 'boost_headers':
-      build_port('boost_headers')
-    elif what == 'mpg123':
-      build_port('mpg123')
+      if do_clear:
+        emscripten.clear_struct_info()
+      if do_build:
+        emscripten.generate_struct_info()
+    elif what in PORTS:
+      if do_clear:
+        clear_port(what)
+      if do_build:
+        build_port(what)
     else:
       logger.error('unfamiliar build target: ' + what)
       return 1

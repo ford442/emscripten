@@ -4,9 +4,14 @@
 Emscripten Test Suite
 =====================
 
-Emscripten has a comprehensive test suite, which covers virtually all Emscripten functionality. These tests are an excellent resource for developers as they provide practical examples of most features, and are known to pass on the master branch. In addition to correctness tests, there are also benchmarks that you can run.
+Emscripten has a comprehensive test suite, which covers virtually all Emscripten
+functionality. These tests are an excellent resource for developers as they
+provide practical examples of most features, and are known to pass on the master
+branch. In addition to correctness tests, there are also benchmarks that you can
+run.
 
-This article explains how to run the test and benchmark suite, and provides an overview of what tests are available.
+This article explains how to run the test and benchmark suite, and provides an
+overview of what tests are available.
 
 Setting up
 ==========
@@ -18,32 +23,33 @@ how best to do that.
 Running tests
 =============
 
-Run the test suite runner (`tests/runner <https://github.com/emscripten-core/emscripten/blob/main/tests/runner.py>`_) with no arguments to see the help message:
+Run the test suite runner (`test/runner <https://github.com/emscripten-core/emscripten/blob/main/test/runner.py>`_) with no arguments to see the help message:
 
 .. code-block:: bash
 
-    tests/runner
+    test/runner
 
-The tests are divided into *modes*. You can run either an entire mode or an individual test, or use wildcards to run some tests in some modes. For example:
+The tests are divided into *modes*. You can run either an entire mode or an
+individual test, or use wildcards to run some tests in some modes. For example:
 
 .. code-block:: bash
 
   # run one test (in the default mode)
-  tests/runner test_loop
+  test/runner test_loop
 
-  # run one test in a specific mode (here, asm.js -O2)
-  tests/runner asm2.test_loop
+  # run a bunch of tests in one mode (here, all i64 tests in -O3)
+  test/runner core3.test_*i64*
 
-  # run a test in a bunch of modes (here, all asm.js modes)
-  tests/runner asm*.test_loop
+  # run all tests in a specific mode (here, wasm2gs -O1)
+  test/runner wasm2js1
 
-  # run a bunch of tests in one mode (here, all i64 tests in wasm -O3)
-  tests/runner wasm3.test_*i64*
-
-  # run all tests in a specific mode (here, asm.js -O1)
-  tests/runner asm1
-
-The *core* test modes (defined at the bottom of `tests/test_core.py <https://github.com/emscripten-core/emscripten/blob/main/tests/test_core.py>`_) let you run a specific test in either asm.js or wasm, and with different optimization flags. There are also non-core test modes, that run tests in more special manner (in particular, in those tests it is not possible to say "run the test with a different optimization flag" - that is what the core tests are for). The non-core test modes include
+The *core* test modes (defined at the bottom of `test/test_core.py
+<https://github.com/emscripten-core/emscripten/blob/main/test/test_core.py>`_)
+let you run a specific test in either asm.js or wasm, and with different
+optimization flags. There are also non-core test modes, that run tests in more
+special manner (in particular, in those tests it is not possible to say "run the
+test with a different optimization flag" - that is what the core tests are for).
+The non-core test modes include
 
  * `other`: Non-core tests running in the shell.
  * `browser`: Tests that run in a browser.
@@ -57,13 +63,13 @@ The wildcards we mentioned above work for non-core test modes too, for example:
 .. code-block:: bash
 
   # run one browser test
-  tests/runner browser.test_sdl_image
+  test/runner browser.test_sdl_image
 
   # run all SDL2 browser tests
-  tests/runner browser.test_sdl2*
+  test/runner browser.test_sdl2*
 
   # run all browser tests
-  tests/runner browser
+  test/runner browser
 
 Skipping Tests
 ==============
@@ -72,13 +78,13 @@ An individual test can be skipped by passing the "skip:" prefix. E.g.
 
 .. code-block:: bash
 
-  tests/runner other skip:other.test_cmake
+  test/runner other skip:other.test_cmake
 
 Wildcards can also be passed in skip, so
 
 .. code-block:: bash
 
-  tests/runner browser skip:browser.test_pthread_*
+  test/runner browser skip:browser.test_pthread_*
 
 will run the whole browser suite except for all the pthread tests in it.
 
@@ -89,36 +95,48 @@ You can run a random subset of the test suite, using something like
 
 .. code-block:: bash
 
-    tests/runner random100
+    test/runner random100
 
-Replace ``100`` with another number as you prefer. This will run that number of random tests, and tell you the statistical likelihood of almost all the test suite passing assuming those tests do. This works just like election surveys do - given a small sample, we can predict fairly well that so-and-so percent of the public will vote for candidate A. In our case, the "candidates" are pass or fail, and we can predict how much of the test suite will pass given that sample. Assuming the sample tests all pass, we can say with high likelihood that most of the test suite will in fact pass. (Of course, this is no guarantee, and even a single test failure is serious, however, this gives a quick estimate that your patch does not cause significant and obvious breakage.)
+Replace ``100`` with another number as you prefer. This will run that number of
+random tests, and tell you the statistical likelihood of almost all the test
+suite passing assuming those tests do. This works just like election surveys do
+- given a small sample, we can predict fairly well that so-and-so percent of the
+public will vote for candidate A. In our case, the "candidates" are pass or
+fail, and we can predict how much of the test suite will pass given that
+sample. Assuming the sample tests all pass, we can say with high likelihood that
+most of the test suite will in fact pass. (Of course, this is no guarantee, and
+even a single test failure is serious, however, this gives a quick estimate that
+your patch does not cause significant and obvious breakage.)
 
 Important Tests
 ===============
 
-Please see the bottom the file `tests/test_core.py <https://github.com/emscripten-core/emscripten/blob/main/tests/test_core.py>`_ for the current test modes, as they may change slowly over time.
-When you want to run the entire test suite locally, these are currently the important commands:
+Please see the bottom the file `test/test_core.py
+<https://github.com/emscripten-core/emscripten/blob/main/test/test_core.py>`_
+for the current test modes, as they may change slowly over time.  When you want
+to run the entire test suite locally, these are currently the important
+commands:
 
 .. code-block:: bash
 
   # Run all core wasm tests
-  tests/runner wasm*
+  test/runner wasm*
 
   # Run "other" test suite
-  tests/runner other
+  test/runner other
 
   # Run "browser" test suite - this requires a web browser
-  tests/runner browser
+  test/runner browser
 
   # Run "sockets" test suite - this requires a web browser too
-  tests/runner sockets
+  test/runner sockets
 
   # Run "sanity" test suite - this tests setting up emscripten during
   # first run, etc., and so it modifies your .emscripten file temporarily.
-  tests/runner sanity
+  test/runner sanity
 
   # Optionally, also run benchmarks to check for regressions
-  tests/runner benchmark
+  test/runner benchmark
 
 .. _benchmarking:
 
@@ -137,16 +155,16 @@ To run the benchmark suite, do:
 .. code-block:: bash
 
   # Run all benchmarks
-  tests/runner benchmark
+  test/runner benchmark
 
 As with all the test suites, you can also run a specific benchmark:
 
 .. code-block:: bash
 
   # Run one specific benchmark
-  tests/runner benchmark.test_skinning
+  test/runner benchmark.test_skinning
 
-Usually you will want to customize the in `tests/test_benchmark.py` to
+Usually you will want to customize the in `test/test_benchmark.py` to
 run the benchmarks you want (there is currently no external config file). Things
 you may want to modify include:
 
@@ -161,20 +179,22 @@ you may want to modify include:
 Debugging test failures
 =======================
 
-Setting the :ref:`debugging-EMCC_DEBUG` is useful for debugging tests, as it emits debug output and intermediate files (the files go in **/tmp/emscripten_temp/**):
+Setting the :ref:`debugging-EMCC_DEBUG` is useful for debugging tests, as it
+emits debug output and intermediate files (the files go in
+**/tmp/emscripten_temp/**):
 
 .. code-block:: bash
 
   # On Windows, use "set" to set and un-set the EMCC_DEBUG environment variable:
   set EMCC_DEBUG=1
-  tests/runner test_hello_world
+  test/runner test_hello_world
   set EMCC_DEBUG=0
 
   # On Linux, you can do this all in one line
-  EMCC_DEBUG=1 tests/runner test_hello_world
+  EMCC_DEBUG=1 test/runner test_hello_world
 
   # EMCC_DEBUG=2 generates additional debug information.
-  EMCC_DEBUG=2 tests/runner test_hello_world
+  EMCC_DEBUG=2 test/runner test_hello_world
 
 
 You can also specify ``--save-dir`` to save the temporary directory that the
@@ -183,6 +203,5 @@ feature, and is useful for inspecting test outputs as well as temporary files
 generated by the test.  By default, the temporary directory will be cleaned
 between each test run, but you can add ``--no-clean`` to avoid this.
 
-
-The :ref:`Debugging` topic provides more guidance on how to debug Emscripten-generated code.
-
+The :ref:`Debugging` topic provides more guidance on how to debug
+Emscripten-generated code.

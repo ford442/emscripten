@@ -13,6 +13,7 @@
 
 #include "interception/interception.h"
 #include "sanitizer_common/sanitizer_allocator.h"
+#include "sanitizer_common/sanitizer_allocator_dlsym.h"
 #include "sanitizer_common/sanitizer_allocator_report.h"
 #include "sanitizer_common/sanitizer_atomic.h"
 #include "sanitizer_common/sanitizer_common.h"
@@ -31,6 +32,17 @@
 #include "lsan_common.h"
 #include "lsan_thread.h"
 
+#if SANITIZER_EMSCRIPTEN
+#define __ATTRP_C11_THREAD ((void*)(uptr)-1)
+#include <emscripten/heap.h>
+extern "C" {
+int emscripten_builtin_pthread_create(void *thread, void *attr,
+                                      void *(*callback)(void *), void *arg);
+int emscripten_builtin_pthread_join(void *th, void **ret);
+int emscripten_builtin_pthread_detach(void *th);
+}
+#endif
+
 #include <stddef.h>
 
 using namespace __lsan;
@@ -43,6 +55,22 @@ int pthread_key_create(unsigned *key, void (*destructor)(void* v));
 int pthread_setspecific(unsigned key, const void *v);
 }
 
+struct DlsymAlloc : DlSymAllocator<DlsymAlloc> {
+  static bool UseImpl() { return lsan_init_is_running; }
+  static void OnAllocate(const void *ptr, uptr size) {
+#if CAN_SANITIZE_LEAKS
+    // Suppress leaks from dlerror(). Previously dlsym hack on global array was
+    // used by leak sanitizer as a root region.
+    __lsan_register_root_region(ptr, size);
+#endif
+  }
+  static void OnFree(const void *ptr, uptr size) {
+#if CAN_SANITIZE_LEAKS
+    __lsan_unregister_root_region(ptr, size);
+#endif
+  }
+};
+
 ///// Malloc/free interceptors. /////
 
 namespace std {
@@ -50,43 +78,36 @@ namespace std {
   enum class align_val_t: size_t;
 }
 
-#if !SANITIZER_MAC
+#if !SANITIZER_APPLE
 INTERCEPTOR(void*, malloc, uptr size) {
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Allocate(size);
   ENSURE_LSAN_INITED;
   GET_STACK_TRACE_MALLOC;
   return lsan_malloc(size, stack);
 }
 
 INTERCEPTOR(void, free, void *p) {
+  if (DlsymAlloc::PointerIsMine(p))
+    return DlsymAlloc::Free(p);
   ENSURE_LSAN_INITED;
   lsan_free(p);
 }
 
 INTERCEPTOR(void*, calloc, uptr nmemb, uptr size) {
-  // This hack is not required for Fuchsia because there are no dlsym calls
-  // involved in setting up interceptors.
-#if !SANITIZER_FUCHSIA
-  if (lsan_init_is_running) {
-    // Hack: dlsym calls calloc before REAL(calloc) is retrieved from dlsym.
-    const uptr kCallocPoolSize = 1024;
-    static uptr calloc_memory_for_dlsym[kCallocPoolSize];
-    static uptr allocated;
-    uptr size_in_words = ((nmemb * size) + kWordSize - 1) / kWordSize;
-    void *mem = (void*)&calloc_memory_for_dlsym[allocated];
-    allocated += size_in_words;
-    CHECK(allocated < kCallocPoolSize);
-    return mem;
-  }
-#endif  // !SANITIZER_FUCHSIA
+  if (DlsymAlloc::Use())
+    return DlsymAlloc::Callocate(nmemb, size);
   ENSURE_LSAN_INITED;
   GET_STACK_TRACE_MALLOC;
   return lsan_calloc(nmemb, size, stack);
 }
 
-INTERCEPTOR(void*, realloc, void *q, uptr size) {
+INTERCEPTOR(void *, realloc, void *ptr, uptr size) {
+  if (DlsymAlloc::Use() || DlsymAlloc::PointerIsMine(ptr))
+    return DlsymAlloc::Realloc(ptr, size);
   ENSURE_LSAN_INITED;
   GET_STACK_TRACE_MALLOC;
-  return lsan_realloc(q, size, stack);
+  return lsan_realloc(ptr, size, stack);
 }
 
 INTERCEPTOR(void*, reallocarray, void *q, uptr nmemb, uptr size) {
@@ -106,7 +127,7 @@ INTERCEPTOR(void*, valloc, uptr size) {
   GET_STACK_TRACE_MALLOC;
   return lsan_valloc(size, stack);
 }
-#endif  // !SANITIZER_MAC
+#endif  // !SANITIZER_APPLE
 
 #if SANITIZER_INTERCEPT_MEMALIGN
 INTERCEPTOR(void*, memalign, uptr alignment, uptr size) {
@@ -232,7 +253,7 @@ INTERCEPTOR(int, mprobe, void *ptr) {
 // libstdc++, each of has its implementation of new and delete.
 // To make sure that C++ allocation/deallocation operators are overridden on
 // OS X we need to intercept them using their mangled names.
-#if !SANITIZER_MAC
+#if !SANITIZER_APPLE
 
 INTERCEPTOR_ATTRIBUTE
 void *operator new(size_t size) { OPERATOR_NEW_BODY(false /*nothrow*/); }
@@ -291,7 +312,7 @@ INTERCEPTOR_ATTRIBUTE
 void operator delete[](void *ptr, size_t size, std::align_val_t) NOEXCEPT
 { OPERATOR_DELETE_BODY; }
 
-#else  // SANITIZER_MAC
+#else  // SANITIZER_APPLE
 
 INTERCEPTOR(void *, _Znwm, size_t size)
 { OPERATOR_NEW_BODY(false /*nothrow*/); }
@@ -311,7 +332,7 @@ INTERCEPTOR(void, _ZdlPvRKSt9nothrow_t, void *ptr, std::nothrow_t const&)
 INTERCEPTOR(void, _ZdaPvRKSt9nothrow_t, void *ptr, std::nothrow_t const&)
 { OPERATOR_DELETE_BODY; }
 
-#endif  // !SANITIZER_MAC
+#endif  // !SANITIZER_APPLE
 
 
 ///// Thread initialization and finalization. /////
@@ -393,17 +414,6 @@ INTERCEPTOR(int, pthread_atfork, void (*prepare)(), void (*parent)(),
 #define LSAN_MAYBE_INTERCEPT_PTHREAD_ATFORK
 #endif
 
-#if SANITIZER_EMSCRIPTEN
-extern "C" {
-  int emscripten_builtin_pthread_create(void *thread, void *attr,
-                                        void *(*callback)(void *), void *arg);
-  int emscripten_builtin_pthread_join(void *th, void **ret);
-  int emscripten_builtin_pthread_detach(void *th);
-  void *emscripten_builtin_malloc(size_t size);
-  void emscripten_builtin_free(void *);
-}
-#endif
-
 #if SANITIZER_INTERCEPT_STRERROR
 INTERCEPTOR(char *, strerror, int errnum) {
   __lsan::ScopedInterceptorDisabler disabler;
@@ -452,7 +462,7 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   ENSURE_LSAN_INITED;
   EnsureMainThreadIDIsCorrect();
   __sanitizer_pthread_attr_t myattr;
-  if (!attr) {
+  if (!attr || attr == __ATTRP_C11_THREAD) {
     pthread_attr_init(&myattr);
     attr = &myattr;
   }
@@ -484,9 +494,8 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
 #endif
   }
   if (res == 0) {
-    int tid = ThreadCreate(GetCurrentThread(), *(uptr *)th,
-                           IsStateDetached(detached));
-    CHECK_NE(tid, 0);
+    int tid = ThreadCreate(GetCurrentThread(), IsStateDetached(detached));
+    CHECK_NE(tid, kMainTid);
 #if SANITIZER_EMSCRIPTEN
     atomic_store(&p->tid, tid, memory_order_release);
 #else
@@ -500,23 +509,11 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
   return res;
 }
 
-INTERCEPTOR(int, pthread_join, void *th, void **ret) {
-  ENSURE_LSAN_INITED;
-  int tid = ThreadTid((uptr)th);
-  int res = REAL(pthread_join)(th, ret);
-  if (res == 0)
-    ThreadJoin(tid);
-  return res;
+INTERCEPTOR(int, pthread_join, void *t, void **arg) {
+  return REAL(pthread_join)(t, arg);
 }
 
-INTERCEPTOR(int, pthread_detach, void *th) {
-  ENSURE_LSAN_INITED;
-  int tid = ThreadTid((uptr)th);
-  int res = REAL(pthread_detach)(th);
-  if (res == 0)
-    ThreadDetach(tid);
-  return res;
-}
+DEFINE_REAL_PTHREAD_FUNCTIONS
 
 #if !SANITIZER_EMSCRIPTEN
 INTERCEPTOR(void, _exit, int status) {
@@ -532,7 +529,8 @@ namespace __lsan {
 
 void InitializeInterceptors() {
   // Fuchsia doesn't use interceptors that require any setup.
-#if !SANITIZER_FUCHSIA && !SANITIZER_EMSCRIPTEN
+#if !SANITIZER_FUCHSIA
+#if !SANITIZER_EMSCRIPTEN
   InitializeSignalInterceptors();
 
   INTERCEPT_FUNCTION(malloc);
@@ -550,7 +548,6 @@ void InitializeInterceptors() {
   LSAN_MAYBE_INTERCEPT_MALLINFO;
   LSAN_MAYBE_INTERCEPT_MALLOPT;
   INTERCEPT_FUNCTION(pthread_create);
-  INTERCEPT_FUNCTION(pthread_detach);
   INTERCEPT_FUNCTION(pthread_join);
   INTERCEPT_FUNCTION(_exit);
 
@@ -562,6 +559,7 @@ void InitializeInterceptors() {
   LSAN_MAYBE_INTERCEPT_PTHREAD_ATFORK;
 
   LSAN_MAYBE_INTERCEPT_STRERROR;
+#endif  // !SANITIZER_EMSCRIPTEN
 
 #if !SANITIZER_NETBSD && !SANITIZER_FREEBSD
   if (pthread_key_create(&g_thread_finalize_key, &thread_finalize)) {

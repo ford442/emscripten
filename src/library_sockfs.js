@@ -8,7 +8,7 @@ mergeInto(LibraryManager.library, {
   $SOCKFS__postset: function() {
     addAtInit('SOCKFS.root = FS.mount(SOCKFS, {}, null);');
   },
-  $SOCKFS__deps: ['$FS', '$ERRNO_CODES'], // TODO: avoid ERRNO_CODES
+  $SOCKFS__deps: ['$FS'],
   $SOCKFS: {
     mount: function(mount) {
       // If Module['websocket'] has already been defined (e.g. for configuring
@@ -35,12 +35,12 @@ mergeInto(LibraryManager.library, {
 
       // If debug is enabled register simple default logging callbacks for each Event.
 #if SOCKET_DEBUG
-      Module['websocket']['on']('error', function(error) {err('Socket error ' + error);});
-      Module['websocket']['on']('open', function(fd) {out('Socket open fd = ' + fd);});
-      Module['websocket']['on']('listen', function(fd) {out('Socket listen fd = ' + fd);});
-      Module['websocket']['on']('connection', function(fd) {out('Socket connection fd = ' + fd);});
-      Module['websocket']['on']('message', function(fd) {out('Socket message fd = ' + fd);});
-      Module['websocket']['on']('close', function(fd) {out('Socket close fd = ' + fd);});
+      Module['websocket']['on']('error', (error) => dbg('Socket error ' + error));
+      Module['websocket']['on']('open', (fd) => dbg('Socket open fd = ' + fd));
+      Module['websocket']['on']('listen', (fd) => dbg('Socket listen fd = ' + fd));
+      Module['websocket']['on']('connection', (fd) => dbg('Socket connection fd = ' + fd));
+      Module['websocket']['on']('message', (fd) => dbg('Socket message fd = ' + fd));
+      Module['websocket']['on']('close', (fd) => dbg('Socket close fd = ' + fd));
 #endif
 
       return FS.createNode(null, '/', {{{ cDefine('S_IFDIR') }}} | 511 /* 0777 */, 0);
@@ -48,8 +48,8 @@ mergeInto(LibraryManager.library, {
     createSocket: function(family, type, protocol) {
       type &= ~{{{ cDefine('SOCK_CLOEXEC') | cDefine('SOCK_NONBLOCK') }}}; // Some applications may pass it; it makes no sense for a single process.
       var streaming = type == {{{ cDefine('SOCK_STREAM') }}};
-      if (protocol) {
-        assert(streaming == (protocol == {{{ cDefine('IPPROTO_TCP') }}})); // if SOCK_STREAM, must be tcp
+      if (streaming && protocol && protocol != {{{ cDefine('IPPROTO_TCP') }}}) {
+        throw new FS.ErrnoError({{{ cDefine('EPROTONOSUPPORT') }}}); // if SOCK_STREAM, must be tcp or 0.
       }
 
       // create our internal socket structure
@@ -143,7 +143,7 @@ mergeInto(LibraryManager.library, {
       createPeer: function(sock, addr, port) {
         var ws;
 
-        if (typeof addr === 'object') {
+        if (typeof addr == 'object') {
           ws = addr;
           addr = null;
           port = null;
@@ -204,8 +204,7 @@ mergeInto(LibraryManager.library, {
               // <any space>,<any space> into an Array. Whitespace removal is important for Websockify and ws.
               subProtocols = subProtocols.replace(/^ +| +$/g,"").split(/ *, */);
 
-              // The node ws library API for specifying optional subprotocol is slightly different than the browser's.
-              opts = ENVIRONMENT_IS_NODE ? {'protocol': subProtocols.toString()} : subProtocols;
+              opts = subProtocols;
             }
 
             // some webservers (azure) does not support subprotocol header
@@ -215,7 +214,7 @@ mergeInto(LibraryManager.library, {
             }
 
 #if SOCKET_DEBUG
-            out('connect: ' + url + ', ' + subProtocols.toString());
+            dbg('connect: ' + url + ', ' + subProtocols.toString());
 #endif
             // If node we use the ws library.
             var WebSocketConstructor;
@@ -230,12 +229,12 @@ mergeInto(LibraryManager.library, {
             ws = new WebSocketConstructor(url, opts);
             ws.binaryType = 'arraybuffer';
           } catch (e) {
-            throw new FS.ErrnoError(ERRNO_CODES.EHOSTUNREACH);
+            throw new FS.ErrnoError({{{ cDefine('EHOSTUNREACH') }}});
           }
         }
 
 #if SOCKET_DEBUG
-        out('websocket adding peer: ' + addr + ':' + port);
+        dbg('websocket adding peer: ' + addr + ':' + port);
 #endif
 
         var peer = {
@@ -251,9 +250,9 @@ mergeInto(LibraryManager.library, {
         // if this is a bound dgram socket, send the port number first to allow
         // us to override the ephemeral port reported to us by remotePort on the
         // remote end.
-        if (sock.type === {{{ cDefine('SOCK_DGRAM') }}} && typeof sock.sport !== 'undefined') {
+        if (sock.type === {{{ cDefine('SOCK_DGRAM') }}} && typeof sock.sport != 'undefined') {
 #if SOCKET_DEBUG
-          out('websocket queuing port message (port ' + sock.sport + ')');
+          dbg('websocket queuing port message (port ' + sock.sport + ')');
 #endif
           peer.dgram_send_queue.push(new Uint8Array([
               255, 255, 255, 255,
@@ -278,7 +277,7 @@ mergeInto(LibraryManager.library, {
 
         var handleOpen = function () {
 #if SOCKET_DEBUG
-          out('websocket handle open');
+          dbg('websocket handle open');
 #endif
 
           Module['websocket'].emit('open', sock.stream.fd);
@@ -287,7 +286,7 @@ mergeInto(LibraryManager.library, {
             var queued = peer.dgram_send_queue.shift();
             while (queued) {
 #if SOCKET_DEBUG
-              out('websocket sending queued data (' + queued.byteLength + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(queued))]);
+              dbg('websocket sending queued data (' + queued.byteLength + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(queued))]);
 #endif
               peer.socket.send(queued);
               queued = peer.dgram_send_queue.shift();
@@ -300,7 +299,7 @@ mergeInto(LibraryManager.library, {
         };
 
         function handleMessage(data) {
-          if (typeof data === 'string') {
+          if (typeof data == 'string') {
             var encoder = new TextEncoder(); // should be utf-8
             data = encoder.encode(data); // make a typed array from the string
           } else {
@@ -310,13 +309,12 @@ mergeInto(LibraryManager.library, {
               // as recv/recvmsg will return zero which indicates that a socket
               // has performed a shutdown although the connection has not been disconnected yet.
               return;
-            } else {
-              data = new Uint8Array(data); // make a typed array view on the array buffer
             }
+            data = new Uint8Array(data); // make a typed array view on the array buffer
           }
 
 #if SOCKET_DEBUG
-          out('websocket handle message (' + data.byteLength + ' bytes): ' + [Array.prototype.slice.call(data)]);
+          dbg('websocket handle message (' + data.byteLength + ' bytes): ' + [Array.prototype.slice.call(data)]);
 #endif
 
           // if this is the port message, override the peer's port with it
@@ -340,11 +338,11 @@ mergeInto(LibraryManager.library, {
 
         if (ENVIRONMENT_IS_NODE) {
           peer.socket.on('open', handleOpen);
-          peer.socket.on('message', function(data, flags) {
-            if (!flags.binary) {
+          peer.socket.on('message', function(data, isBinary) {
+            if (!isBinary) {
               return;
             }
-            handleMessage((new Uint8Array(data)).buffer);  // copy from node Buffer -> ArrayBuffer
+            handleMessage((new Uint8Array(data)).buffer); // copy from node Buffer -> ArrayBuffer
           });
           peer.socket.on('close', function() {
             Module['websocket'].emit('close', sock.stream.fd);
@@ -354,7 +352,7 @@ mergeInto(LibraryManager.library, {
             // ECONNREFUSED they are not necessarily the expected error code e.g. 
             // ENOTFOUND on getaddrinfo seems to be node.js specific, so using ECONNREFUSED
             // is still probably the most useful thing to do.
-            sock.error = ERRNO_CODES.ECONNREFUSED; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
+            sock.error = {{{ cDefine('ECONNREFUSED') }}}; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
             Module['websocket'].emit('error', [sock.stream.fd, sock.error, 'ECONNREFUSED: Connection refused']);
             // don't throw
           });
@@ -369,7 +367,7 @@ mergeInto(LibraryManager.library, {
           peer.socket.onerror = function(error) {
             // The WebSocket spec only allows a 'simple event' to be thrown on error,
             // so we only really know as much as ECONNREFUSED.
-            sock.error = ERRNO_CODES.ECONNREFUSED; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
+            sock.error = {{{ cDefine('ECONNREFUSED') }}}; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
             Module['websocket'].emit('error', [sock.stream.fd, sock.error, 'ECONNREFUSED: Connection refused']);
           };
         }
@@ -419,7 +417,7 @@ mergeInto(LibraryManager.library, {
             {{{ makeSetValue('arg', '0', 'bytes', 'i32') }}};
             return 0;
           default:
-            return ERRNO_CODES.EINVAL;
+            return {{{ cDefine('EINVAL') }}};
         }
       },
       close: function(sock) {
@@ -444,8 +442,8 @@ mergeInto(LibraryManager.library, {
         return 0;
       },
       bind: function(sock, addr, port) {
-        if (typeof sock.saddr !== 'undefined' || typeof sock.sport !== 'undefined') {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);  // already bound
+        if (typeof sock.saddr != 'undefined' || typeof sock.sport != 'undefined') {
+          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});  // already bound
         }
         sock.saddr = addr;
         sock.sport = port;
@@ -464,13 +462,13 @@ mergeInto(LibraryManager.library, {
             sock.sock_ops.listen(sock, 0);
           } catch (e) {
             if (!(e instanceof FS.ErrnoError)) throw e;
-            if (e.errno !== ERRNO_CODES.EOPNOTSUPP) throw e;
+            if (e.errno !== {{{ cDefine('EOPNOTSUPP') }}}) throw e;
           }
         }
       },
       connect: function(sock, addr, port) {
         if (sock.server) {
-          throw new FS.ErrnoError(ERRNO_CODES.EOPNOTSUPP);
+          throw new FS.ErrnoError({{{ cDefine('EOPNOTSUPP') }}});
         }
 
         // TODO autobind
@@ -478,13 +476,13 @@ mergeInto(LibraryManager.library, {
         // }
 
         // early out if we're already connected / in the middle of connecting
-        if (typeof sock.daddr !== 'undefined' && typeof sock.dport !== 'undefined') {
+        if (typeof sock.daddr != 'undefined' && typeof sock.dport != 'undefined') {
           var dest = SOCKFS.websocket_sock_ops.getPeer(sock, sock.daddr, sock.dport);
           if (dest) {
             if (dest.socket.readyState === dest.socket.CONNECTING) {
-              throw new FS.ErrnoError(ERRNO_CODES.EALREADY);
+              throw new FS.ErrnoError({{{ cDefine('EALREADY') }}});
             } else {
-              throw new FS.ErrnoError(ERRNO_CODES.EISCONN);
+              throw new FS.ErrnoError({{{ cDefine('EISCONN') }}});
             }
           }
         }
@@ -496,20 +494,20 @@ mergeInto(LibraryManager.library, {
         sock.dport = peer.port;
 
         // always "fail" in non-blocking mode
-        throw new FS.ErrnoError(ERRNO_CODES.EINPROGRESS);
+        throw new FS.ErrnoError({{{ cDefine('EINPROGRESS') }}});
       },
       listen: function(sock, backlog) {
         if (!ENVIRONMENT_IS_NODE) {
-          throw new FS.ErrnoError(ERRNO_CODES.EOPNOTSUPP);
+          throw new FS.ErrnoError({{{ cDefine('EOPNOTSUPP') }}});
         }
 #if ENVIRONMENT_MAY_BE_NODE
         if (sock.server) {
-           throw new FS.ErrnoError(ERRNO_CODES.EINVAL);  // already listening
+           throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});  // already listening
         }
         var WebSocketServer = require('ws').Server;
         var host = sock.saddr;
 #if SOCKET_DEBUG
-        out('listen: ' + host + ':' + sock.sport);
+        dbg('listen: ' + host + ':' + sock.sport);
 #endif
         sock.server = new WebSocketServer({
           host: host,
@@ -520,7 +518,7 @@ mergeInto(LibraryManager.library, {
 
         sock.server.on('connection', function(ws) {
 #if SOCKET_DEBUG
-          out('received connection from: ' + ws._socket.remoteAddress + ':' + ws._socket.remotePort);
+          dbg('received connection from: ' + ws._socket.remoteAddress + ':' + ws._socket.remotePort);
 #endif
           if (sock.type === {{{ cDefine('SOCK_STREAM') }}}) {
             var newsock = SOCKFS.createSocket(sock.family, sock.type, sock.protocol);
@@ -541,7 +539,7 @@ mergeInto(LibraryManager.library, {
             Module['websocket'].emit('connection', sock.stream.fd);
           }
         });
-        sock.server.on('closed', function() {
+        sock.server.on('close', function() {
           Module['websocket'].emit('close', sock.stream.fd);
           sock.server = null;
         });
@@ -552,15 +550,15 @@ mergeInto(LibraryManager.library, {
           // is still probably the most useful thing to do. This error shouldn't
           // occur in a well written app as errors should get trapped in the compiled
           // app's own getaddrinfo call.
-          sock.error = ERRNO_CODES.EHOSTUNREACH; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
+          sock.error = {{{ cDefine('EHOSTUNREACH') }}}; // Used in getsockopt for SOL_SOCKET/SO_ERROR test.
           Module['websocket'].emit('error', [sock.stream.fd, sock.error, 'EHOSTUNREACH: Host is unreachable']);
           // don't throw
         });
 #endif // ENVIRONMENT_MAY_BE_NODE
       },
       accept: function(listensock) {
-        if (!listensock.server) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+        if (!listensock.server || !listensock.pending.length) {
+          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
         }
         var newsock = listensock.pending.shift();
         newsock.stream.flags = listensock.stream.flags;
@@ -570,7 +568,7 @@ mergeInto(LibraryManager.library, {
         var addr, port;
         if (peer) {
           if (sock.daddr === undefined || sock.dport === undefined) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENOTCONN);
+            throw new FS.ErrnoError({{{ cDefine('ENOTCONN') }}});
           }
           addr = sock.daddr;
           port = sock.dport;
@@ -592,7 +590,7 @@ mergeInto(LibraryManager.library, {
           }
           // if there was no address to fall back to, error out
           if (addr === undefined || port === undefined) {
-            throw new FS.ErrnoError(ERRNO_CODES.EDESTADDRREQ);
+            throw new FS.ErrnoError({{{ cDefine('EDESTADDRREQ') }}});
           }
         } else {
           // connection-based sockets will only use the bound
@@ -606,9 +604,9 @@ mergeInto(LibraryManager.library, {
         // early out if not connected with a connection-based socket
         if (sock.type === {{{ cDefine('SOCK_STREAM') }}}) {
           if (!dest || dest.socket.readyState === dest.socket.CLOSING || dest.socket.readyState === dest.socket.CLOSED) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENOTCONN);
+            throw new FS.ErrnoError({{{ cDefine('ENOTCONN') }}});
           } else if (dest.socket.readyState === dest.socket.CONNECTING) {
-            throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
+            throw new FS.ErrnoError({{{ cDefine('EAGAIN') }}});
           }
         }
 
@@ -643,7 +641,7 @@ mergeInto(LibraryManager.library, {
               dest = SOCKFS.websocket_sock_ops.createPeer(sock, addr, port);
             }
 #if SOCKET_DEBUG
-            out('websocket queuing (' + length + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(data))]);
+            dbg('websocket queuing (' + length + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(data))]);
 #endif
             dest.dgram_send_queue.push(data);
             return length;
@@ -652,20 +650,20 @@ mergeInto(LibraryManager.library, {
 
         try {
 #if SOCKET_DEBUG
-          out('websocket send (' + length + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(data))]);
+          dbg('websocket send (' + length + ' bytes): ' + [Array.prototype.slice.call(new Uint8Array(data))]);
 #endif
           // send the actual data
           dest.socket.send(data);
           return length;
         } catch (e) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError({{{ cDefine('EINVAL') }}});
         }
       },
       recvmsg: function(sock, length) {
         // http://pubs.opengroup.org/onlinepubs/7908799/xns/recvmsg.html
         if (sock.type === {{{ cDefine('SOCK_STREAM') }}} && sock.server) {
           // tcp servers should not be recv()'ing on the listen socket
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTCONN);
+          throw new FS.ErrnoError({{{ cDefine('ENOTCONN') }}});
         }
 
         var queued = sock.recv_queue.shift();
@@ -675,19 +673,16 @@ mergeInto(LibraryManager.library, {
 
             if (!dest) {
               // if we have a destination address but are not connected, error out
-              throw new FS.ErrnoError(ERRNO_CODES.ENOTCONN);
+              throw new FS.ErrnoError({{{ cDefine('ENOTCONN') }}});
             }
-            else if (dest.socket.readyState === dest.socket.CLOSING || dest.socket.readyState === dest.socket.CLOSED) {
+            if (dest.socket.readyState === dest.socket.CLOSING || dest.socket.readyState === dest.socket.CLOSED) {
               // return null if the socket has closed
               return null;
             }
-            else {
-              // else, our socket is in a valid state but truly has nothing available
-              throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
-            }
-          } else {
-            throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
+            // else, our socket is in a valid state but truly has nothing available
+            throw new FS.ErrnoError({{{ cDefine('EAGAIN') }}});
           }
+          throw new FS.ErrnoError({{{ cDefine('EAGAIN') }}});
         }
 
         // queued.data will be an ArrayBuffer if it's unadulterated, but if it's
@@ -703,14 +698,14 @@ mergeInto(LibraryManager.library, {
         };
 
 #if SOCKET_DEBUG
-        out('websocket read (' + bytesRead + ' bytes): ' + [Array.prototype.slice.call(res.buffer)]);
+        dbg('websocket read (' + bytesRead + ' bytes): ' + [Array.prototype.slice.call(res.buffer)]);
 #endif
 
         // push back any unread data for TCP connections
         if (sock.type === {{{ cDefine('SOCK_STREAM') }}} && bytesRead < queuedLength) {
           var bytesRemaining = queuedLength - bytesRead;
 #if SOCKET_DEBUG
-          out('websocket read: put back ' + bytesRemaining + ' bytes');
+          dbg('websocket read: put back ' + bytesRemaining + ' bytes');
 #endif
           queued.data = new Uint8Array(queuedBuffer, queuedOffset + bytesRead, bytesRemaining);
           sock.recv_queue.unshift(queued);
@@ -732,25 +727,21 @@ mergeInto(LibraryManager.library, {
    * Passing a NULL callback function to a emscripten_set_socket_*_callback call
    * will deregister the callback registered for that Event.
    */
-#if !MINIMAL_RUNTIME
-  $_setNetworkCallback__deps: ['$runtimeKeepalivePush'],
-#endif
+  $_setNetworkCallback__deps: ['$withStackSave', '$allocateUTF8OnStack'],
   $_setNetworkCallback: function(event, userData, callback) {
     function _callback(data) {
       try {
         if (event === 'error') {
-          var sp = stackSave();
-          var msg = allocate(intArrayFromString(data[2]), ALLOC_STACK);
-          {{{ makeDynCall('viiii', 'callback') }}}(data[0], data[1], msg, userData);
-          stackRestore(sp);
+          withStackSave(function() {
+            var msg = allocateUTF8OnStack(data[2]);
+            {{{ makeDynCall('viiii', 'callback') }}}(data[0], data[1], msg, userData);
+          });
         } else {
           {{{ makeDynCall('vii', 'callback') }}}(data, userData);
         }
       } catch (e) {
-        if (e instanceof ExitStatus) {
-          return;
-        } else {
-          if (e && typeof e === 'object' && e.stack) err('exception thrown: ' + [e, e.stack]);
+        if (!(e instanceof ExitStatus)) {
+          if (e && typeof e == 'object' && e.stack) err('exception thrown: ' + [e, e.stack]);
           throw e;
         }
       }

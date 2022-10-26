@@ -18,8 +18,496 @@ to browse the changes between the tags.
 
 See docs/process.md for more on how version tagging works.
 
-2.0.26
-------
+3.1.25 (in development)
+-----------------------
+- Exporting `print`/`printErr` via `-sEXPORTED_RUNTIME_METHODS` is deprecated in
+  favor of `out`/`err`.  The former symbols are supposed to be used with
+  `-sINCOMING_MODULE_JS_API` instead. (#17955)
+- aio.h was removed from the sysroot.  Emscripten doesn't support any of the
+  functions in this header.
+
+3.1.24 - 10/11/22
+-----------------
+- In Wasm exception mode (`-fwasm-exceptions`), when `ASSERTIONS` is enabled,
+  uncaught exceptions will display stack traces and what() message. (#17979 and
+  #18003)
+- It is now possible to specify indirect dependencies on JS library functions
+  directly in C/C++ source code.  For example, in the case of a EM_JS or EM_ASM
+  JavaScript function that depends on a JS library function.  See the
+  `EM_JS_DEPS` macro in the `em_macros.h` header.  Adding dependencies in this
+  way avoids the need to specify them on the command line with
+  `-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE`. (#17854)
+
+3.1.23 - 09/23/22
+-----------------
+- The `__EMSCRIPTEN_major__/minor__/tiny__` macros are no longer defined on the
+  command line but require `<emscripten.h/>` (or just `<emscripten/version.h>`
+  to be included. (#17883)
+- Linking of bitcode files using `emcc -r` + `-flto` is no longer supported.
+  `emcc -r` will now always use lld to link to an object file.  This matches the
+  behavior of upstream llvm where bitcode linking using lld does not exist.
+  The recommend way to combine bitcode input is to use library files (`ar`
+  archives).  See #13492 for more details.
+
+3.1.22 - 09/19/22
+-----------------
+- compiler-rt updated to LLVM 15. (#17802)
+- Using `-Oz` or `-Os` will no longer pass `-fno-inline-functions` to clang and
+  instead rely on clang's normal inline heuristics for these optimization
+  levels.  `-fno-inline-functions` can be passed explicitly if needed.
+- C++17 is now the default version of the C++ standard used by the compiler.
+  This is due to an upstream change in llvm.  Use `-std=c++14` (or technically
+  `-std=gnu++14`) to revert to the previous default.
+- Closure warnings are now controlled via the standard `-Wclosure` warning flags
+  rather than via a specific/custom `CLOSURE_WARNINGS` setting.  The old
+  setting continues to work but will issue a deprecation warning.
+  If you link with `-Werror` but you don't want closure warnings to be errors
+  you can add `-Wno-error=closure` or `-Wno-closure`.
+
+3.1.21 - 09/09/2022
+-------------------
+- Update SDL2 port to 2.24.0 (#17748)
+- The `LEGACY_RUNTIME` setting is no longer enabled by default.  If you use any
+  of these legacy runtime functions (except in library code with explicit
+  dependencies) then you would need to set `LEGACY_RUNTIME` on the command line
+  or add the ones you need to `DEFAULT_LIBRARY_FUNCS_TO_INCLUDE`:
+   - addFunction
+   - removeFunction
+   - allocate
+   - AsciiToString
+   - stringToAscii
+   - UTF16ToString
+   - stringToUTF16
+   - lengthBytesUTF16
+   - UTF32ToString
+   - stringToUTF32
+   - lengthBytesUTF32
+   - allocateUTF8
+   - allocateUTF8OnStack
+   - writeStringToMemory
+   - writeArrayToMemory
+   - writeAsciiToMemory
+   - intArrayFromString
+   - intArrayToString
+   - warnOnce
+   - ccall
+   - cwrap
+  Although this is technically a breaking change for those who use these
+  functions, there are assertion in debug builds that catch such usages and
+  direct towards how to fix the issue.
+
+3.1.20 - 08/24/2022
+-------------------
+- The `getTempRet0`/`setTempRet0` helper functions are now implemented directly
+  in WebAssembly, rather than supplied by the JS host.  This simplifies the
+  wasm/JS interface.  These function are no longer exported in all cases.  If
+  your code directly calls these functions from JS, you can add them to
+  `-sEXPORTED_RUNTIME_METHODS`.
+- Several linux-specific headers were removed from the emscripten sysroot. None
+  of the functionality in these headers was ever supported by emscripten. For
+  example `sys/soundcard.h` and `sys/ptrace.h`. (#17704)
+
+3.1.19 - 08/17/2022
+-------------------
+- Old method of metadata extraction via wasm-emscripten-finalize removed
+  in favor of local python code. (#16529)
+
+3.1.18 - 08/01/2022
+-------------------
+- The tests/ directory was renamed to just test/ to match other project close
+  emscripten (llvm, wabt, binaryen).  This should not effect any users of
+  emscripten, only developers. (#17502)
+- The llvm version that emscripten uses was updated to 16.0.0 (#17534)
+- worker.js now propagates unhandled promise rejections to the main thread the
+  same way it propagates uncaught exceptions.
+
+3.1.17 - 07/22/2022
+-------------------
+- Add support for dynamic linking with Asyncify. (#15893)
+- A source map file and DWARF info in the wasm can now be emitted at the same if
+  the user gives the both options: `-g -gsource-map`. (#17484)
+- The `align` argument to the makeGetValue/makeSetValue JS library macros was
+  removed (and replaced with an assert) as it had no uses internally and was
+  removed (and replaced with an assert) as it had now uses internally and was
+  untested.
+- Removed unused `calledMain` global variable from the JS runtime.  Folks who
+  want to know when main is done can use `Module[postRun]`.
+
+3.1.16 - 07/14/2022
+-------------------
+- Warnings generated by the JS compiler (compiler.js) are now propagated back
+  to the emcc compiler driver which means that `-Werror` builds will now fail
+  in the presence of JS compiler warnings.  As usual `-Wno-js-compiler` and
+  `-Wno-error=js-compiler)` can be used to control these warnings. (#17365)
+- When JS library functions are included as part of `EXPORTED_RUNTIME_METHODS`
+  it is no longer necessary to also add them to
+  `DEFAULT_LIBRARY_FUNCS_TO_INCLUDE`.  This change allows us to transition
+  runtime functions to JS library functions without the need to folks to add
+  `DEFAULT_LIBRARY_FUNCS_TO_INCLUDE`. (#17369)
+- The following function, which were previously part of the default runtime, are
+  now JS library functions:
+   - addFunction
+   - removeFunction
+   - allocate
+   - AsciiToString
+   - stringToAscii
+   - UTF16ToString
+   - stringToUTF16
+   - lengthBytesUTF16
+   - UTF32ToString
+   - stringToUTF32
+   - lengthBytesUTF32
+   - allocateUTF8
+   - allocateUTF8OnStack
+   - writeStringToMemory
+   - writeArrayToMemory
+   - writeAsciiToMemory
+   - intArrayFromString
+   - intArrayToString
+   - warnOnce
+   - ccall
+   - cwrap
+  However, they all still available by default due to a new setting called
+  `LEGACY_RUNTIME` which is enabled by default.  When `LEGACY_RUNTIME` is
+  disabled (which it may be in the future) these symbols would only be included
+  if there were explictly exported via `EXPORTED_RUNTIME_METHODS` or added to
+  `DEFAULT_LIBRARY_FUNCS_TO_INCLUDE`.  `LEGACY_RUNTIME` is disabled by default
+  in `STRICT` mode so this change only effects users of `STRICT` mode. (#17370,
+  #17403)
+- The `run` runtime function is no longer exported by default.  It can be added
+  to `EXPORTED_RUNTIME_METHODS` if needed.
+- The getWasmTableEntry/setWasmTableEntry library function are no longer
+  included by default.  Add them to `DEFAULT_LIBRARY_FUNCS_TO_INCLUDE` or
+  `EXPORTED_RUNTIME_METHODS` if you want to use them outside of JS library code.
+- The type of `time_t` was restored 64-bit after being converted to 32-bit in
+  3.1.11. (#17401)
+
+3.1.15 - 07/01/2022
+-------------------
+- The JS library helper function `hasExportedFunction` has been replaced with
+  `hasExportedSymbol`, which takes an unmangled (no leading underscore) symbol
+  name.
+- Post-link metadata extraction switched from wasm-emscripten-finalize
+  (binaryen) to python code within emscripten.  This change should have no
+  semantic effect, but can temporarily be reverted by setting
+  `EMCC_READ_METADATA=binaryen` in the environment. (#17337)
+- Added a shim for `BigInt64Array` so `-sWASM_BIGINT` can be used in Safari
+  v14. (#17103)
+
+3.1.14 - 06/20/2022
+-------------------
+- emcc now accepts `-print-file-name` and reports the correct library paths in
+  `-print-search-dirs`.
+- `tools/file_packager` no longer generates (or requires) any "pre-js" code when
+  running in `--embed-file` mode.  Instead the embedded files are loaded at
+  static constructor time.
+- Emscripten now knows what minimum browser versions the `WASM_BIGINT` feature
+  requires and will automatically set the defaults accordingly. (#17163)
+- Embind now supports binding to functions specified as `noexcept`. (#17140)
+- Weak undefined symbols fixed in dynamic linking. (#17164)
+- Internally, the name of `main` function now gets mangled (by clang) in the
+  same way as with other wasm targets.  This means that within the wasm module
+  the name of the main function can now be `__main_argc_argv`, but, since we
+  still export this to JS as `_main`, this should not be a user-visible change.
+- Use of pkg-config from cmake not longer causes the C++ include path to be
+  broken. (#17137)
+- `emscripten_runtime_keeplive_push()` and `emscripten_runtime_keeplive_push()`
+  are now exposed to native code and can be used to keep the runtime alive
+  without immediately unwinding the event loop (as
+  `emscripten_exit_with_live_runtime()` does). (#17160)
+- The file packager option `--use-preload-cache` now only invalidates the
+  cache if the data contents has changed. (#16807)
+
+3.1.13 - 06/02/2022
+-------------------
+- xlocale.h compatibility header was restored after being removed in 3.1.12.
+
+3.1.12 - 05/25/2022
+-------------------
+- Fix crash, introduced in 3.1.11, which occurred when using pointer types
+  (types ending in `*`) with getValue/setValue library functions. (#17028)
+- Fix possible deadlock in multi-threaded builds that use EXIT_RUNTIME=0 with
+  ASSERTIONS enabled. This was introduced in 3.1.3 as part of #16130. (#17044)
+
+3.1.11 - 05/21/2022
+-------------------
+- The return value of `emscripten_get_compiler_setting` was changed from `int`
+  to `long` so that it is compatible with `MEMORY64`.  The return value of this
+  function sometimes contains a pointer value so `int` is not sufficiently
+  wide under `wasm64`. (#16938)
+- The `EM_BUILD_VERBOSE` environment variable only effects test code these days
+  and therefore was renamed to `EMTEST_BUILD_VERBOSE`. (#16904)
+- compiler-rt updated to LLVM 14. (#16991)
+- libc++ updated to LLVM 14. (#17000)
+- libc++abi updated to LLVM 14. (#16993)
+
+3.1.10 - 05/02/2022
+-------------------
+- Bug fixes
+
+3.1.9 - 04/21/2022
+------------------
+- The `-sSHELL_FILE` setting, which (unlike the --shell-file command line
+  options) we believe was never tested or externally used, has been removed.
+  (#16589)
+- A warning is now issued when passing C++-only settings such
+  `-sEXCEPTION_CATCHING_ALLOWED` when not linking as C++. (#16609)
+- Introduce a new [proxying
+  API](https://emscripten.org/docs/api_reference/proxying.h.html) for proxying
+  work between threads.
+
+3.1.8 - 03/24/2022
+------------------
+- Command line settings (`-s`) are now type checked.  For example, passing a
+  string to a boolean setting will now generate an error (e.g.
+  `-sEXIT_RUNTIME=foo`).  Previously, the value of `foo` would have have been
+  interpreted as non-zero and accepted as valid. (#16539)
+- A warning (limited-postlink-optimizations) was added that gets shown when
+  binaryen optimizations are limited due to DWARF information being requested.
+  Several binaryen passed are not compatible with the preservation of DWARF
+  information. (#16428)
+- Use normalized mouse wheel delta for GLFW 3 in `library_glfw.js`. This changes 
+  the vertical scroll amount for GLFW 3. (#16480)
+- The emsdk binaries for macOS now require macOS 10.14 Mojave (or above).
+  Prior versions of emsdk could run on 10.11 (or above), but supporting those
+  older versions recently became harder.
+- The SDL_mixer library can be configured to support MIDIs by passing "mid"
+  to the SDL2_MIXER_FORMATS setting. It uses Timidity, and you must provide
+  your own instrument sound files and mount them at "/etc/timidity". (#16556)
+
+3.1.7 - 03/07/2022
+-------------------
+- Remove unmaintained ASMFS filesystem backend and associated `-sASMFS`
+  settings.  The new wasmfs filesystem is far enough along that it seems clear
+  that ASMFS will not need to be revived.
+- Fix deadlock in `munmap` that was introduced in 3.1.5.  The deadlock would
+  occur in multi-threaded programs when a partial unmap was requested (which
+  emscripten does not support). (#16413)
+- Added new compiler+linker option -sSHARED_MEMORY=1, which enables targeting
+  a shared WebAssembly.Memory. (#16419)
+- Added new API "Wasm Workers", which is an alternative to pthreads for building
+  multithreaded applications, enabled via -sWASM_WORKERS=1 (#12833)
+
+3.1.6 - 02/24/2022
+------------------
+- Remove support for deprecated `EMMAKEN_COMPILER`, `EMMAKEN_CFLAGS`, and
+  `EMMAKEN_NO_SDK`  environment variables.  These are all legacy and redundant
+  in the face of other settings/flags:
+   - `EMMAKEN_COMPILER` -> `LLVM_ROOT` in the config settings
+   - `EMMAKEN_CFLAGS` -> `EMCC_CFLAGS`
+   - `EMMAKEN_NO_SDK` -> standard `-nostdlib` and `-nostdinc` flags
+- emscripten will no longer automatically create a config file if it can't
+  find one in the configured location.  Instead, it will error out and point the
+  user to the `--generate-config` option, in case that is what they want.
+  (#13962)
+
+3.1.5 - 02/17/2022
+------------------
+- Emscripten no longer uses the `allocate()` runtime function.  For backwards
+  compatabiliy with external JS code we still include this function by default
+  but it will no longer be included in `-sSTRICT` mode.  Usages of this function
+  are generally best replaced with `_malloc`, `stackAlloc` or `allocateUTF8`.
+
+3.1.4 - 02/14/2022
+------------------
+- Due to an llvm change (https://reviews.llvm.org/D118573) some clang flags
+  that did not previously have any effect are now honored (e.g.
+  `-fnew-alignment` and `-fshort-wchar`).
+- llvm dependency updated to 15.0.0 to match upstream. (#16178)
+- The `__EMSCRIPTEN_major__`, `__EMSCRIPTEN_minor__` and `__EMSCRIPTEN_tiny__`
+  macros are now available via the `emscripten/version.h` header file.  For the
+  time being, unless you enable `-sSTRICT`, these are still also defined
+  directly on the command line.  If you use these macros please make sure you
+  include `emscripten/version.h` (or `emscripten.h` which indirectly includes
+  it). (#16147)
+
+3.1.3 - 01/31/2022
+------------------
+- The file packager now supports embedding files directly into wasm memory and
+  `emcc` now uses this mode when the `--embed-file` option is used.  If you
+  use `file_packager` directly it is recommended that you switch to the new mode
+  by adding `--obj-output` to the command line. (#16050)
+- The `--bind` flag used to enable embind has been deprecated in favor of
+  `-lembind`.  The semantics have not changed and the old flag continues to
+  work. (#16087)
+- New setjmp/longjmp support using Wasm EH instructions is added, which is
+  faster and reduces code size. You need a browser that supports Wasm EH spec to
+  use it. The new SjLj support is enabled by `-sSUPPORT_LONGJMP=wasm`. This can
+  be used with Wasm exception support (`-fwasm-exceptions`), but not with
+  Emscripten exception support (`-fexceptions` or
+  `-sDISABLE_EXCEPTION_CATCHING=0`). When using Wasm EH with Wasm SjLj, there is
+  one restriction that you cannot directly call `setjmp` within a `catch`
+  clause. (Calling another function that calls `setjmp` is fine.)
+  (#14976 and #16072)
+
+3.1.2 - 01/20/2022
+------------------
+- A new setting, `POLYFILL`, was added which is on by default but can be disabled
+  (via `-sNO_POLYFILL`) to prevent emscripten from outputing needed polyfills.
+  For default browser targets, no polyfills are needed so this option only has
+  meaning when targeting older browsers.
+- `EVAL_CTORS` has been rewritten and improved. The main differences from before
+  are that it is much more capable (it can now eval parts of functions and not
+  just all or nothing, and it can eval more wasm constructs like globals). It is
+  no longer run by default, so to use it you should build with `-s EVAL_CTORS`.
+  See `settings.js` for more details. (#16011)
+- `wasmX` test suites that are defined in `test_core.py` have been renamed to
+  `coreX` to better reflect where they are defined.  The old suite names such
+  as `wasm2` will continue to work for now as aliases.
+
+3.1.1 - 01/08/2022
+------------------
+- Happy new year!
+- Updated SDL 2 port to upstream version 2.0.18 (from a patched 2.0.10). This
+  includes all downstream patches and many upstream changes.
+- libc++ library updated to llvm-13. (#15901)
+- libc++-abi library updated to llvm-13. (#15904)
+- compiler-rt library updated to llvm-13. (#15906)
+- Added new internal/debugging related environment variable
+  EM_FORCE_RESPONSE_FILES that can be set to 0 to force disable the use of
+  response files, and to 1 to force enable response files. If not set,
+  response files will be used if command lines are long (> 8192 chars). (#15973)
+
+3.1.0 - 12/22/2021
+------------------
+- Emscripten in starting to use ES6 features in its core libraries (at last!).
+  For most users targeting the default set of browsers this is a code size win.
+  For projects targeting older browsers (e.g. `-sMIN_CHROME_VERSION=10`),
+  emscripten will now run closure compiler in `WHITESPACE_ONLY` mode in order to
+  traspile any ES6 down to ES5.  When this automatic transpilation is performed
+  we generate a warning which can be disabled (using `-Wno-transpile`) or by
+  explicitly opting in-to or out-of closure using `--closure=1` or
+  `--closure=0`. (#15763).
+
+3.0.1 - 12/17/2021
+------------------
+- Deprecate `EMMAKEN_CFLAGS` is favor of `EMCC_CFLAGS`.
+- Fixed an issue where user provided --js-library directives would not be
+  processed as the last item after all system provided JS libraries have been
+  added to the build. This fix enables overriding WebGL 2 symbols from user JS
+  libraries.
+
+3.0.0 - 11/22/2021
+------------------
+- A set of internally-unused functions were removed from `parseTools.js`.  While
+  emscripten no longer needs any of these functions, there is slim chance that
+  some external JS library is depending on them.  Please file issues if any such
+  library code is found.  The removed/unused functions are:
+   `removePointing`, `pointingLevels`, `removeAllPointing`, `isVoidType`,
+   `isStructPointerType`, `isArrayType`, `isStructType`, `isVectorType`,
+   `isStructuralType` `getStructuralTypeParts`, `getStructuralTypePartBits`,
+   `isFunctionDef`, `isPossiblyFunctionType`, `isFunctionType`, `getReturnType`,
+   `splitTokenList`, `_IntToHex`, `IEEEUnHex`, `Compiletime.isPointerType`,
+   `Compiletime.isStructType`, `Compiletime.INT_TYPES`, `isType`.
+- The example `shell.html` and `shell_minimal.html` templates no longer override
+  `printErr` on the module object.  This means error message from emscripten and
+  stderr from the application will go to the default location of `console.warn`
+  rather than `console.error`.  This only effects application that use the
+  example shell html files.
+- The version of musl libc used by emscripten was upgraded from v1.1.15 to
+  v1.2.2.  There could be some minor size regressions (or gains) due to changes
+  in upstream musl code but we don't expect anything major.  Since this is a
+  fairly substantial change (at least internally) we are bumping the major
+  version of Emscripten to 3. (#13006)
+- Added support for specifying the text encoding to be used in response filenames
+  by passing the encoding as a file suffix (e.g. "a.rsp.utf-8" or "a.rsp.cp1252").
+  If not specified, the encoding is autodetected as either UTF-8 or Python
+  default "locale.getpreferredencoding()". (#15406, #15292, #15426)
+
+2.0.34 - 11/04/2021
+-------------------
+- Symbols marked as visibility hidden are no longer exported from C/C++
+  code when building with `SIDE_MODULE`, `MAIN_MODULE` or `LINKABLE`.  If you
+  need to export a hidden symbol you can still do so by adding it to
+  EXPORTED_FUNCTIONS.
+
+2.0.33 - 11/01/2021
+-------------------
+- Bug fixes
+
+2.0.32 - 10/19/2021
+-------------------
+- Internal-only library functions can now be marked as `__internal: true` in JS
+  system libraries.  Such symbols should not be used by external libraries and
+  are subject to change.  As of now we generate warning when external libraries
+  depend on the these symbols.
+- Stub functions from `library_syscall.js` and `library.js` were replaced with
+  native code stubs (See `system/lib/libc/emscripten_syscall_stubs.c`).  This
+  should be better for wasm module portability as well as code size.  As part
+  of this change the return value of `popen` was fixed to return NULL rather
+  than -1 and the `getpwnam` family of functions were changed to return an
+  error rather than throw a JavaScript exception (this behaviour matches what
+  the other stub functions do).  As before, the `ALLOW_UNIMPLEMENTED_SYSCALLS`
+  setting controls whether of not these stubs get included at link time, and
+  `STRICT` disables this setting.
+- Emscripten will now warn when linker-only flags are specified in
+  compile-only (`-c`) mode.  Just like with clang itself, this warning can be
+  disabled using the flag: `-Wno-unused-command-line-argument`.
+- Internal symbol names for musl syscalls changed from number-based (e.g.
+  `__syscall22`) to name-based (e.g. `__syscall_open`).  This should not be
+  a visible change except for folks trying to intercept/implement syscalls
+  in native code (#15202).
+- Fixed launcher batch script issues on Windows, and added two env. vars
+  EM_WORKAROUND_PYTHON_BUG_34780 and EM_WORKAROUND_WIN7_BAD_ERRORLEVEL_BUG that
+  can be enabled to work around a Windows Python issue
+  https://bugs.python.org/issue34780 , and a Windows 7 exit code issue (#15146)
+- Support a new CMake propert `EMSCRIPTEN_SYSTEM_PROCESSOR` which can be used
+  to override the default value of `CMAKE_SYSTEM_PROCESSOR` set by the
+  toolchain file.
+- Remove support for the `EMIT_EMSCRIPTEN_METADATA` setting.  This setting has
+  been deprecated for some time now and we don't know of any remaining reasons to
+  keep it around.
+- Add JavaScript API `Emval.{toHandle, toValue}` as well as a C++ method
+  `val::as_handle()` to allow passing values between the `val` class and
+  `EM_JS`/ `EM_ASM` JavaScript snippets. (#15279)
+- Added SAFE_HEAP=2 option which tests safe heap behavior for wasm-only builds
+  (allowing unaligned memory accesses, which would not work in Wasm2JS but in
+   wasm would be correct but potentially slow).
+
+2.0.31 - 10/01/2021
+-------------------
+- Bug fixes
+
+2.0.30 - 09/14/2021
+-------------------
+- Bug fixes
+
+2.0.29 - 08/26/2021
+-------------------
+- Bug fixes
+
+2.0.28 - 08/23/2021
+-------------------
+- Added some support for signal handling libc functions (raise, kill,
+  sigaction, sigpending, etc).  We still don't have a way to deliver signals from
+  the outside but these at least now work for sending signals to the current
+  thread (JS context) (#14883).
+- Remove the workaround used in emcmake and emmake that removed directories
+  with sh.exe from PATH on Windows when MinGW Makefiles generator was used.
+  This was needed with CMake versions older than 3.17.0. If you get an error
+  "sh.exe was found in your PATH" on Windows, you can either update to CMake
+  3.17.0 or newer, or remove the offending directory from your PATH. See
+  https://github.com/Kitware/CMake/commit/82ddcf0db1d220564145122c3cce25d25ee0e254
+  for more information. (#14930)
+
+2.0.27 - 08/12/2021
+-------------------
+- Added `EM_ASYNC_JS` macro - similar to `EM_JS`, but allows using `await`
+  inside the JS block and automatically integrates with Asyncify without
+  the need for listing the declared function in `ASYNCIFY_IMPORTS` (#9709).
+- Errors that occur on pthreads (e.g. uncaught exception) will now get re-thrown
+  on the main thread rather than simply being logged (#13666).
+
+2.0.26 - 07/26/2021
+-------------------
+- When building ports with the `embuilder` tool some of the names of the
+  libraries have changed (they now match the filenames in the `tools/ports/`
+  directory). For example `sdl-image` is now `sdl_image` (#14737).
+- Undefined data symbols (in static executables) are no longer silently ignored
+  at link time.  The previous behaviour (which was to silently give all
+  undefined data symbols address zero, which could lead to bugs)
+  can be enabled by passing either `-Wl,--allow-undefined` or
+  `-Wl,--unresolved-symbols=ignore-all`.
 - The alignment of `long double`, which is a 128-bit floating-point value
   implemented in software, is reduced from 16 to 8. The lower alignment allows
   `max_align_t` to properly match the alignment we use for malloc, which is 8
@@ -38,10 +526,15 @@ See docs/process.md for more on how version tagging works.
   `emscripten_dlopen()` declared in `emscropten/emscripten.h`.  See
   `docs/api_reference/emscripten.h.rst` (or the online version) for more
   details.
+- Constructors, functions and methods bound with Embind can now be `await`ed.
+  When Asyncify is used somewhere in the callstack, previously Embind would
+  return `0` / `null` / `false` / instance with a NULL pointer, making it
+  impossible to wait for the function to actually finish and retrieve its
+  result. Now in those cases it will return a `Promise` instead that will
+  resolve with the function's return value upon completion. (#11890)
 
 2.0.25 - 06/30/2021
 -------------------
-
 - Support for the 'shell' environment is now disabled by default.  Running under
   `d8`, `js`, or `jsc` is not something that most emscripten users ever want to
   do, so including the support code is, more often than not, unnecessary.  Users
@@ -111,6 +604,7 @@ See docs/process.md for more on how version tagging works.
   wasm binary.
 - The experimental SPLIT_MODULE setting now expects the secondary module to be
   named `<module>.deferred.wasm` instead of `<module>.wasm.deferred`.
+- sendfile.h header removed from musl. (#14248)
 
 2.0.21: 05/18/2021
 ------------------
@@ -276,6 +770,9 @@ See docs/process.md for more on how version tagging works.
 - Several pthreads exit-related fixes (#12985) (#10524).
 - Fix IDBFS syncing with existing directories (#13574).
 - Add libmodplug port and allow mod files to be played in SDL2 (#13478).
+- `emscripten_GetProcAddress` is now part of `libGL`. Normally the change is not
+  noticeable, unless you build in `STRICT` mode and do not already have `-lGL`
+  to link in that library. If not, add `-lGL`. (#13524)
 
 2.0.14: 02/14/2021
 ------------------
@@ -1578,7 +2075,7 @@ v1.37.11: 5/1/2017
 ------------------
  - Added missing SIGSTKSZ define after musl 1.1.15 update (#5149)
  - Fix emscripten_get_mouse_status (#5152)
- - Fix _mm_set_epi64x() function (#5103)
+ - Fix `_mm_set_epi64x()` function (#5103)
  - Fix issue with number of gamepads connected at initial page load (#5169, #5170)
  - Full list of changes:
     - Emscripten: https://github.com/emscripten-core/emscripten/compare/1.37.10...1.37.11
@@ -1969,7 +2466,7 @@ v1.36.1: 3/8/2016
    at each explicit JS side stack allocation call to allocate().
  - Fixed an issue with -s SPLIT_MEMORY mode where an unsigned 32-bit memory
    access would come out as signed. (#4150)
- - Fixed asm.js validation in call handlers to llvm_powi_f*.
+ - Fixed asm.js validation in call handlers to `llvm_powi_f*`.
  - Full list of changes:
     - Emscripten: https://github.com/emscripten-core/emscripten/compare/1.36.0...1.36.1
     - Emscripten-LLVM: https://github.com/emscripten-core/emscripten-fastcomp/compare/1.36.0...1.36.1
@@ -1984,7 +2481,7 @@ v1.36.0: 2/23/2016
    correct value. (#4092)
  - Implemented new JS optimizer "Duplicate Function Elimination" pass which
    collapses identical functions to save code size.
- - Implemented the _Exit() function.
+ - Implemented the `_Exit()` function.
  - Added support for SSE3 and SSSE3 intrinsics (#4099) and partially for SSE 4.1
    intrinsics (#4030, #4101)
  - Added support for -include-pch flag (#4086)
@@ -2145,7 +2642,7 @@ v1.35.14: 12/15/2015
 
 v1.35.13: 12/15/2015
 --------------------
- - Updated -s USE_PTHREADS code generation to reflect that the SharedInt*Array
+ - Updated -s USE_PTHREADS code generation to reflect that the `SharedInt*Array`
    hierarchy no longer exists in the SharedArrayBuffer spec.
  - Removed references to Atomic.fence() which no longer is part of the
    SharedArrayBuffer specification.
@@ -2244,7 +2741,7 @@ v1.35.5: 11/4/2015
 ------------------
  - Removed Content-Length and Connection: close headers in POST requests.
  - Migrate to using the native C++11-implemented optimizer by default.
- - Fixed call to glDrawBuffers(0, *); (#3890)
+ - Fixed call to `glDrawBuffers(0, *);` (#3890)
  - Fixed lazy file system to work with closure (#3842)
  - Fixed gzip compression with lazy file system (#3837)
  - Added no-op gracefully failing stubs for process spawn functions (#3819)
@@ -2383,7 +2880,7 @@ v1.34.8: 9/9/2015
 
 v1.34.7: 9/5/2015
 -----------------
- - Fixed uses of i64* in side modules.
+ - Fixed uses of `i64*` in side modules.
  - Improved GL support when proxying, and fake WebAudio calls when proxying.
  - Added new main loop timing mode EM_TIMING_SETIMMEDIATE for rendering with
    vsync disabled (#3717)
@@ -2549,7 +3046,7 @@ v1.32.3: 5/15/2015
  - Improved dynamic linking support.
  - Added new option to file_packager.py to store metadata externally.
  - Improved CMake support with CMAKE_CROSSCOMPILING_EMULATOR (#3447).
- - Added support for sysconf(_SC_PHYS_PAGES) (#3405, 3442).
+ - Added support for `sysconf(_SC_PHYS_PAGES)` (#3405, 3442).
  - Full list of changes:
     - Emscripten: https://github.com/emscripten-core/emscripten/compare/1.32.2...1.32.3
     - Emscripten-LLVM: https://github.com/emscripten-core/emscripten-fastcomp/compare/1.32.2...1.32.3
@@ -2785,7 +3282,7 @@ v1.29.10: 2/19/2015
  - Improved the error message in abort().
  - Fix main loop handling during emterpreter sync save/load.
  - Handle emscripten_async_call and friends during sleep, by pausing all
-   safeSet*() operations.
+   `safeSet*()` operations.
  - Add support for Google WTF when building with --tracing.
  - Improve emterpreter stability with fuzzing.
  - Add an option to load the memory initializer file from a typed array (#3187)
@@ -2809,7 +3306,7 @@ v1.29.9: 2/9/2015
    otherwise minified, except that function names are kept intact, for use in
    profilers and getting descriptive call stacks.
  - The Module object is no longer written in global scope. (#3167)
- - Added new emscripten_idb_* API. (#3169)
+ - Added new `emscripten_idb_*` API. (#3169)
  - Added new function emscripten_wget_data().
  - Add support for GL_RED with GLES3/WebGL2. (#3176)
  - Added basic WebVR support. (#3177)
@@ -2846,7 +3343,7 @@ v1.29.7: 1/28/2015
 
 v1.29.6: 1/23/2015
 -------------------
- - Fixed an issue where calling glGen*() when the GL context was lost might
+ - Fixed an issue where calling `glGen*()` when the GL context was lost might
    throw a JS exception, instead a GL_INVALID_OPERATION is now recorded.
  - Improve label handling in native optimizer.
  - Full list of changes:

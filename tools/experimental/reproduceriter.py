@@ -42,7 +42,7 @@ Usage:
    example, if your application is a game that starts receiving
    events when in fullscreen, add something like
 
-    if (typeof Recorder != 'undefined') Recorder.start();
+    if (typeof Recorder !== 'undefined') Recorder.start();
 
    in the button that launches fullscreen. start() will start
    either recording when in record mode, or replaying when
@@ -143,7 +143,7 @@ shutil.copytree(in_dir, out_dir)
 
 print('add customizations...')
 
-for parent, dirs, files in os.walk(out_dir):
+for parent, _, files in os.walk(out_dir):
   for filename in files:
     if filename.endswith('.js'):
       fullname = os.path.join(parent, filename)

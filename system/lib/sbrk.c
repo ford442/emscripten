@@ -18,7 +18,7 @@
 #endif
 
 #ifdef __EMSCRIPTEN_TRACING__
-#include <emscripten/em_asm.h>
+void emscripten_memprof_sbrk_grow(intptr_t old, intptr_t new);
 #endif
 
 #include <emscripten/heap.h>
@@ -47,11 +47,13 @@ uintptr_t* emscripten_get_sbrk_ptr() {
   return &sbrk_val;
 }
 
+// Enforce preserving a minimal alignof(maxalign_t) alignment for sbrk.
+#define SBRK_ALIGNMENT (__alignof__(max_align_t))
+
 void *sbrk(intptr_t increment_) {
   uintptr_t old_size;
-  // Enforce preserving a minimal 4-byte alignment for sbrk.
   uintptr_t increment = (uintptr_t)increment_;
-  increment = (increment + 3) & ~3;
+  increment = (increment + (SBRK_ALIGNMENT-1)) & ~(SBRK_ALIGNMENT-1);
 #if __EMSCRIPTEN_PTHREADS__
   // Our default dlmalloc uses locks around each malloc/free, so no additional
   // work is necessary to keep things threadsafe, but we also make sure sbrk
@@ -96,7 +98,7 @@ void *sbrk(intptr_t increment_) {
 #endif // __EMSCRIPTEN_PTHREADS__
 
 #ifdef __EMSCRIPTEN_TRACING__
-    EM_ASM({if (typeof emscriptenMemoryProfiler !== 'undefined') emscriptenMemoryProfiler.onSbrkGrow($0, $1)}, old_brk, old_brk + increment );
+    emscripten_memprof_sbrk_grow(old_brk, new_brk);
 #endif
     return (void*)old_brk;
 
@@ -109,15 +111,16 @@ Error:
   return (void*)-1;
 }
 
-int brk(uintptr_t ptr) {
+int brk(void* ptr) {
 #if __EMSCRIPTEN_PTHREADS__
   // FIXME
   printf("brk() is not theadsafe yet, https://github.com/emscripten-core/emscripten/issues/10006");
   abort();
-#endif
+#else
   uintptr_t last = (uintptr_t)sbrk(0);
-  if (sbrk(ptr - last) == (void*)-1) {
+  if (sbrk((uintptr_t)ptr - last) == (void*)-1) {
     return -1;
   }
   return 0;
+#endif
 }

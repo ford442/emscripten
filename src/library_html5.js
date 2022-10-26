@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 
-var LibraryJSEvents = {
+var LibraryHTML5 = {
+  $JSEvents__deps: ['$withStackSave'],
   $JSEvents: {
 
 /* We do not depend on the exact initial values of falsey member fields - these fields can be populated on-demand
@@ -188,13 +189,13 @@ var LibraryJSEvents = {
 
 #if USE_PTHREADS
     queueEventHandlerOnThread_iiii: function(targetThread, eventHandlerFunc, eventTypeId, eventData, userData) {
-      var stackTop = stackSave();
-      var varargs = stackAlloc(12);
-      {{{ makeSetValue('varargs', 0, 'eventTypeId', 'i32') }}};
-      {{{ makeSetValue('varargs', 4, 'eventData', 'i32') }}};
-      {{{ makeSetValue('varargs', 8, 'userData', 'i32') }}};
-      __emscripten_call_on_thread(0, targetThread, {{{ cDefine('EM_FUNC_SIG_IIII') }}}, eventHandlerFunc, eventData, varargs);
-      stackRestore(stackTop);
+      withStackSave(function() {
+        var varargs = stackAlloc(12);
+        {{{ makeSetValue('varargs', 0, 'eventTypeId', 'i32') }}};
+        {{{ makeSetValue('varargs', 4, 'eventData', 'i32') }}};
+        {{{ makeSetValue('varargs', 8, 'userData', 'i32') }}};
+        _emscripten_dispatch_to_thread_(targetThread, {{{ cDefine('EM_FUNC_SIG_IIII') }}}, eventHandlerFunc, eventData, varargs);
+      });
     },
 #endif
 
@@ -251,6 +252,8 @@ var LibraryJSEvents = {
 #else
       var keyEventData = JSEvents.keyEvent;
 #endif
+      {{{ makeSetValue('keyEventData', C_STRUCTS.EmscriptenKeyboardEvent.timestamp, 'e.timeStamp', 'double') }}};
+
       var idx = keyEventData >> 2;
 
       HEAP32[idx + {{{ C_STRUCTS.EmscriptenKeyboardEvent.location / 4}}}] = e.location;
@@ -300,7 +303,7 @@ var LibraryJSEvents = {
   //    specialHTMLTargets["!canvas"] = Module.canvas;
   // (that will let !canvas map to the canvas held in Module.canvas).
 #if ENVIRONMENT_MAY_BE_WORKER || ENVIRONMENT_MAY_BE_NODE || ENVIRONMENT_MAY_BE_SHELL || USE_PTHREADS
-  $specialHTMLTargets: "[0, typeof document !== 'undefined' ? document : 0, typeof window !== 'undefined' ? window : 0]",
+  $specialHTMLTargets: "[0, typeof document != 'undefined' ? document : 0, typeof window != 'undefined' ? window : 0]",
 #else
   $specialHTMLTargets: "[0, document, window]",
 #endif
@@ -318,7 +321,7 @@ var LibraryJSEvents = {
   $findEventTarget: function(target) {
     target = maybeCStringToJsString(target);
 #if ENVIRONMENT_MAY_BE_WORKER || ENVIRONMENT_MAY_BE_NODE
-    var domElement = specialHTMLTargets[target] || (typeof document !== 'undefined' ? document.querySelector(target) : undefined);
+    var domElement = specialHTMLTargets[target] || (typeof document != 'undefined' ? document.querySelector(target) : undefined);
 #else
     var domElement = specialHTMLTargets[target] || document.querySelector(target);
 #endif
@@ -347,7 +350,7 @@ var LibraryJSEvents = {
      || (target == 'canvas' && Object.keys(GL.offscreenCanvases)[0])
     // If that is not found either, query via the regular DOM selector.
 #if USE_PTHREADS
-     || (typeof document !== 'undefined' && document.querySelector(target));
+     || (typeof document != 'undefined' && document.querySelector(target));
 #else
      || document.querySelector(target);
 #endif
@@ -362,19 +365,19 @@ var LibraryJSEvents = {
   $findEventTarget__deps: ['$specialHTMLTargets'],
   $findEventTarget: function(target) {
 #if ASSERTIONS
-    warnOnce('Rules for selecting event targets in HTML5 API are changing: instead of using document.getElementById() that only can refer to elements by their DOM ID, new event target selection mechanism uses the more flexible function document.querySelector() that can look up element names, classes, and complex CSS selectors. Build with -s DISABLE_DEPRECATED_FIND_EVENT_TARGET_BEHAVIOR=1 to change to the new lookup rules. See https://github.com/emscripten-core/emscripten/pull/7977 for more details.');
+    warnOnce('Rules for selecting event targets in HTML5 API are changing: instead of using document.getElementById() that only can refer to elements by their DOM ID, new event target selection mechanism uses the more flexible function document.querySelector() that can look up element names, classes, and complex CSS selectors. Build with -sDISABLE_DEPRECATED_FIND_EVENT_TARGET_BEHAVIOR to change to the new lookup rules. See https://github.com/emscripten-core/emscripten/pull/7977 for more details.');
 #endif
     try {
       // The sensible "default" target varies between events, but use window as the default
       // since DOM events mostly can default to that. Specific callback registrations
       // override their own defaults.
       if (!target) return window;
-      if (typeof target === "number") target = specialHTMLTargets[target] || UTF8ToString(target);
+      if (typeof target == "number") target = specialHTMLTargets[target] || UTF8ToString(target);
       if (target === '#window') return window;
       else if (target === '#document') return document;
       else if (target === '#screen') return screen;
       else if (target === '#canvas') return Module['canvas'];
-      return (typeof target === 'string') ? document.getElementById(target) : target;
+      return (typeof target == 'string') ? document.getElementById(target) : target;
     } catch(e) {
       // In Web Workers, some objects above, such as '#document' do not exist. Gracefully
       // return null for them.
@@ -385,12 +388,12 @@ var LibraryJSEvents = {
   // Like findEventTarget, but looks for OffscreenCanvas elements first
   $findCanvasEventTarget__deps: ['$findEventTarget'],
   $findCanvasEventTarget: function(target) {
-    if (typeof target === 'number') target = UTF8ToString(target);
+    if (typeof target == 'number') target = UTF8ToString(target);
     if (!target || target === '#canvas') {
-      if (typeof GL !== 'undefined' && GL.offscreenCanvases['canvas']) return GL.offscreenCanvases['canvas']; // TODO: Remove this line, target '#canvas' should refer only to Module['canvas'], not to GL.offscreenCanvases['canvas'] - but need stricter tests to be able to remove this line.
+      if (typeof GL != 'undefined' && GL.offscreenCanvases['canvas']) return GL.offscreenCanvases['canvas']; // TODO: Remove this line, target '#canvas' should refer only to Module['canvas'], not to GL.offscreenCanvases['canvas'] - but need stricter tests to be able to remove this line.
       return Module['canvas'];
     }
-    if (typeof GL !== 'undefined' && GL.offscreenCanvases[target]) return GL.offscreenCanvases[target];
+    if (typeof GL != 'undefined' && GL.offscreenCanvases[target]) return GL.offscreenCanvases[target];
     return findEventTarget(target);
   },
 #endif
@@ -435,6 +438,7 @@ var LibraryJSEvents = {
 #if ASSERTIONS
     assert(eventStruct % 4 == 0);
 #endif
+    {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenMouseEvent.timestamp, 'e.timeStamp', 'double') }}};
     var idx = eventStruct >> 2;
     HEAP32[idx + {{{ C_STRUCTS.EmscriptenMouseEvent.screenX / 4 }}}] = e.screenX;
     HEAP32[idx + {{{ C_STRUCTS.EmscriptenMouseEvent.screenY / 4 }}}] = e.screenY;
@@ -693,11 +697,11 @@ var LibraryJSEvents = {
   emscripten_set_wheel_callback_on_thread__deps: ['$JSEvents', '$registerWheelEventCallback', '$findEventTarget'],
   emscripten_set_wheel_callback_on_thread: function(target, userData, useCapture, callbackfunc, targetThread) {
     target = findEventTarget(target);
-    if (typeof target.onwheel !== 'undefined') {
+    if (typeof target.onwheel != 'undefined') {
       registerWheelEventCallback(target, userData, useCapture, callbackfunc, {{{ cDefine('EMSCRIPTEN_EVENT_WHEEL') }}}, "wheel", targetThread);
       return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
 #if MIN_IE_VERSION <= 8 || MIN_SAFARI_VERSION < 60100 // Browsers that do not support https://caniuse.com/#feat=mdn-api_wheelevent
-    } else if (typeof target.onmousewheel !== 'undefined') {
+    } else if (typeof target.onmousewheel != 'undefined') {
       registerWheelEventCallback(target, userData, useCapture, callbackfunc, {{{ cDefine('EMSCRIPTEN_EVENT_WHEEL') }}}, "mousewheel", targetThread);
       return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
 #endif
@@ -1062,7 +1066,7 @@ var LibraryJSEvents = {
   emscripten_get_orientation_status__sig: 'ii',
   emscripten_get_orientation_status__deps: ['$fillOrientationChangeEventData', '$screenOrientation'],
   emscripten_get_orientation_status: function(orientationChangeEvent) {
-    if (!screenOrientation() && typeof orientation === 'undefined') return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
+    if (!screenOrientation() && typeof orientation == 'undefined') return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
     fillOrientationChangeEventData(orientationChangeEvent);
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
@@ -1089,11 +1093,10 @@ var LibraryJSEvents = {
     }
     if (succeeded) {
       return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
-    } else {
-      return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED') }}};
     }
+    return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED') }}};
   },
-  
+
   emscripten_unlock_orientation__proxy: 'sync',
   emscripten_unlock_orientation__sig: 'i',
   emscripten_unlock_orientation: function() {
@@ -1115,7 +1118,10 @@ var LibraryJSEvents = {
   $fillFullscreenChangeEventData: function(eventStruct) {
     var fullscreenElement = document.fullscreenElement || document.mozFullScreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
     var isFullscreen = !!fullscreenElement;
+#if !SAFE_HEAP
+    // Assigning a boolean to HEAP32 with expected type coercion.
     /** @suppress{checkTypes} */
+#endif
     {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenFullscreenChangeEvent.isFullscreen, 'isFullscreen', 'i32') }}};
     {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenFullscreenChangeEvent.fullscreenEnabled, 'JSEvents.fullscreenEnabled()', 'i32') }}};
     // If transitioning to fullscreen, report info about the element that is now fullscreen.
@@ -1207,11 +1213,11 @@ var LibraryJSEvents = {
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
 
-  JSEvents_requestFullscreen__deps: ['$JSEvents', 'JSEvents_resizeCanvasForFullscreen'],
-  JSEvents_requestFullscreen: function(target, strategy) {
+  $JSEvents_requestFullscreen__deps: ['$JSEvents', '$JSEvents_resizeCanvasForFullscreen'],
+  $JSEvents_requestFullscreen: function(target, strategy) {
     // EMSCRIPTEN_FULLSCREEN_SCALE_DEFAULT + EMSCRIPTEN_FULLSCREEN_CANVAS_SCALE_NONE is a mode where no extra logic is performed to the DOM elements.
     if (strategy.scaleMode != {{{ cDefine('EMSCRIPTEN_FULLSCREEN_SCALE_DEFAULT') }}} || strategy.canvasResolutionScaleMode != {{{ cDefine('EMSCRIPTEN_FULLSCREEN_CANVAS_SCALE_NONE') }}}) {
-      _JSEvents_resizeCanvasForFullscreen(target, strategy);
+      JSEvents_resizeCanvasForFullscreen(target, strategy);
     }
 
     if (target.requestFullscreen) {
@@ -1247,8 +1253,8 @@ var LibraryJSEvents = {
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
 
-  JSEvents_resizeCanvasForFullscreen__deps: ['$registerRestoreOldStyle', '$getCanvasElementSize', '$setLetterbox', '$setCanvasElementSize', '$getBoundingClientRect'],
-  JSEvents_resizeCanvasForFullscreen: function(target, strategy) {
+  $JSEvents_resizeCanvasForFullscreen__deps: ['$registerRestoreOldStyle', '$getCanvasElementSize', '$setLetterbox', '$setCanvasElementSize', '$getBoundingClientRect'],
+  $JSEvents_resizeCanvasForFullscreen: function(target, strategy) {
     var restoreOldStyle = registerRestoreOldStyle(target);
     var cssWidth = strategy.softFullscreen ? innerWidth : screen.width;
     var cssHeight = strategy.softFullscreen ? innerHeight : screen.height;
@@ -1526,7 +1532,7 @@ var LibraryJSEvents = {
   },
 
   // https://developer.mozilla.org/en-US/docs/Web/Guide/API/DOM/Using_full_screen_mode  
-  $doRequestFullscreen__deps: ['$JSEvents', '$setLetterbox', 'emscripten_set_canvas_element_size', 'emscripten_get_canvas_element_size', '$getCanvasElementSize', '$setCanvasElementSize', 'JSEvents_requestFullscreen', '$findEventTarget'],
+  $doRequestFullscreen__deps: ['$JSEvents', '$setLetterbox', 'emscripten_set_canvas_element_size', 'emscripten_get_canvas_element_size', '$getCanvasElementSize', '$setCanvasElementSize', '$JSEvents_requestFullscreen', '$findEventTarget'],
   $doRequestFullscreen: function(target, strategy) {
     if (!JSEvents.fullscreenEnabled()) return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
 #if !DISABLE_DEPRECATED_FIND_EVENT_TARGET_BEHAVIOR
@@ -1556,15 +1562,14 @@ var LibraryJSEvents = {
     // Queue this function call if we're not currently in an event handler and the user saw it appropriate to do so.
     if (!canPerformRequests) {
       if (strategy.deferUntilInEventHandler) {
-        JSEvents.deferCall(_JSEvents_requestFullscreen, 1 /* priority over pointer lock */, [target, strategy]);
+        JSEvents.deferCall(JSEvents_requestFullscreen, 1 /* priority over pointer lock */, [target, strategy]);
         return {{{ cDefine('EMSCRIPTEN_RESULT_DEFERRED') }}};
-      } else {
-        return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED_NOT_DEFERRED') }}};
       }
+      return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED_NOT_DEFERRED') }}};
     }
 #endif
 
-    return _JSEvents_requestFullscreen(target, strategy);
+    return JSEvents_requestFullscreen(target, strategy);
   },
 
   emscripten_request_fullscreen__deps: ['$doRequestFullscreen'],
@@ -1605,7 +1610,7 @@ var LibraryJSEvents = {
     return doRequestFullscreen(target, strategy);
   },
 
-  emscripten_enter_soft_fullscreen__deps: ['$JSEvents', '$setLetterbox', '$hideEverythingExceptGivenElement', '$restoreOldWindowedStyle', '$registerRestoreOldStyle', '$restoreHiddenElements', '$currentFullscreenStrategy', '$softFullscreenResizeWebGLRenderTarget', '$getCanvasElementSize', '$setCanvasElementSize', 'JSEvents_resizeCanvasForFullscreen', '$findEventTarget'],
+  emscripten_enter_soft_fullscreen__deps: ['$JSEvents', '$setLetterbox', '$hideEverythingExceptGivenElement', '$restoreOldWindowedStyle', '$registerRestoreOldStyle', '$restoreHiddenElements', '$currentFullscreenStrategy', '$softFullscreenResizeWebGLRenderTarget', '$getCanvasElementSize', '$setCanvasElementSize', '$JSEvents_resizeCanvasForFullscreen', '$findEventTarget'],
   emscripten_enter_soft_fullscreen__proxy: 'sync',
   emscripten_enter_soft_fullscreen__sig: 'iii',
   emscripten_enter_soft_fullscreen: function(target, fullscreenStrategy) {
@@ -1628,7 +1633,7 @@ var LibraryJSEvents = {
         softFullscreen: true
     };
 
-    var restoreOldStyle = _JSEvents_resizeCanvasForFullscreen(target, strategy);
+    var restoreOldStyle = JSEvents_resizeCanvasForFullscreen(target, strategy);
 
     document.documentElement.style.overflow = 'hidden';  // Firefox, Chrome
     document.body.scroll = "no"; // IE11
@@ -1675,14 +1680,14 @@ var LibraryJSEvents = {
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
 
-  emscripten_exit_fullscreen__deps: ['$JSEvents', '$currentFullscreenStrategy', 'JSEvents_requestFullscreen', '$specialHTMLTargets'],
+  emscripten_exit_fullscreen__deps: ['$JSEvents', '$currentFullscreenStrategy', '$JSEvents_requestFullscreen', '$specialHTMLTargets'],
   emscripten_exit_fullscreen__proxy: 'sync',
   emscripten_exit_fullscreen__sig: 'i',
   emscripten_exit_fullscreen: function() {
     if (!JSEvents.fullscreenEnabled()) return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
 #if HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS
     // Make sure no queued up calls will fire after this.
-    JSEvents.removeDeferredCalls(_JSEvents_requestFullscreen);
+    JSEvents.removeDeferredCalls(JSEvents_requestFullscreen);
 #endif
 
     var d = specialHTMLTargets[{{{ cDefine('EMSCRIPTEN_EVENT_TARGET_DOCUMENT') }}}];
@@ -1711,7 +1716,10 @@ var LibraryJSEvents = {
   $fillPointerlockChangeEventData: function(eventStruct) {
     var pointerLockElement = document.pointerLockElement || document.mozPointerLockElement || document.webkitPointerLockElement || document.msPointerLockElement;
     var isPointerlocked = !!pointerLockElement;
-    /** @suppress {checkTypes} */
+#if !SAFE_HEAP
+    // Assigning a boolean to HEAP32 with expected type coercion.
+    /** @suppress{checkTypes} */
+#endif
     {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenPointerlockChangeEvent.isActive, 'isPointerlocked', 'i32') }}};
     var nodeName = JSEvents.getNodeNameForTarget(pointerLockElement);
     var id = (pointerLockElement && pointerLockElement.id) ? pointerLockElement.id : '';
@@ -1868,9 +1876,8 @@ var LibraryJSEvents = {
 #endif
         ) {
         return {{{ cDefine('EMSCRIPTEN_RESULT_INVALID_TARGET') }}};
-      } else {
-        return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
       }
+      return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
     }
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
@@ -1906,9 +1913,8 @@ var LibraryJSEvents = {
       if (deferUntilInEventHandler) {
         JSEvents.deferCall(requestPointerLock, 2 /* priority below fullscreen */, [target]);
         return {{{ cDefine('EMSCRIPTEN_RESULT_DEFERRED') }}};
-      } else {
-        return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED_NOT_DEFERRED') }}};
       }
+      return {{{ cDefine('EMSCRIPTEN_RESULT_FAILED_NOT_DEFERRED') }}};
     }
 #endif
 
@@ -1970,8 +1976,10 @@ var LibraryJSEvents = {
     var visibilityStates = [ "hidden", "visible", "prerender", "unloaded" ];
     var visibilityState = visibilityStates.indexOf(document.visibilityState);
 
+#if !SAFE_HEAP
     // Assigning a boolean to HEAP32 with expected type coercion.
-    /** @suppress {checkTypes} */
+    /** @suppress{checkTypes} */
+#endif
     {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenVisibilityChangeEvent.hidden, 'document.hidden', 'i32') }}};
     {{{ makeSetValue('eventStruct', C_STRUCTS.EmscriptenVisibilityChangeEvent.visibilityState, 'visibilityState', 'i32') }}};
   },
@@ -2028,7 +2036,7 @@ var LibraryJSEvents = {
   emscripten_get_visibility_status__sig: 'ii',
   emscripten_get_visibility_status__deps: ['$fillVisibilityChangeEventData'],
   emscripten_get_visibility_status: function(visibilityStatus) {
-    if (typeof document.visibilityState === 'undefined' && typeof document.hidden === 'undefined') {
+    if (typeof document.visibilityState == 'undefined' && typeof document.hidden == 'undefined') {
       return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
     }
     fillVisibilityChangeEventData(visibilityStatus);  
@@ -2048,30 +2056,27 @@ var LibraryJSEvents = {
 #if ASSERTIONS
       assert(e);
 #endif
-      var touches = {};
-      var et = e.touches;
+      var t, touches = {}, et = e.touches;
+      // To ease marshalling different kinds of touches that browser reports (all touches are listed in e.touches, 
+      // only changed touches in e.changedTouches, and touches on target at a.targetTouches), mark a boolean in
+      // each Touch object so that we can later loop only once over all touches we see to marshall over to Wasm.
+
       for (var i = 0; i < et.length; ++i) {
-        var touch = et[i];
-#if ASSERTIONS
-        // Verify that browser does not recycle touch objects with old stale data, but reports new ones each time.
-        assert(!touch.isChanged);
-        assert(!touch.onTarget);
-#endif
-        touches[touch.identifier] = touch;
+        t = et[i];
+        // Browser might recycle the generated Touch objects between each frame (Firefox on Android), so reset any
+        // changed/target states we may have set from previous frame.
+        t.isChanged = t.onTarget = 0;
+        touches[t.identifier] = t;
       }
-      et = e.changedTouches;
-      for (var i = 0; i < et.length; ++i) {
-        var touch = et[i];
-#if ASSERTIONS
-        // Verify that browser does not recycle touch objects with old stale data, but reports new ones each time.
-        assert(!touch.onTarget);
-#endif
-        touch.isChanged = 1;
-        touches[touch.identifier] = touch;
+      // Mark which touches are part of the changedTouches list.
+      for (var i = 0; i < e.changedTouches.length; ++i) {
+        t = e.changedTouches[i];
+        t.isChanged = 1;
+        touches[t.identifier] = t;
       }
-      et = e.targetTouches;
-      for (var i = 0; i < et.length; ++i) {
-        touches[et[i].identifier].onTarget = 1;
+      // Mark which touches are part of the targetTouches list.
+      for (var i = 0; i < e.targetTouches.length; ++i) {
+        touches[e.targetTouches[i].identifier].onTarget = 1;
       }
 
 #if USE_PTHREADS
@@ -2079,6 +2084,7 @@ var LibraryJSEvents = {
 #else
       var touchEvent = JSEvents.touchEvent;
 #endif
+      {{{ makeSetValue('touchEvent', C_STRUCTS.EmscriptenTouchEvent.timestamp, 'e.timeStamp', 'double') }}};
       var idx = touchEvent>>2; // Pre-shift the ptr to index to HEAP32 to save code size
       HEAP32[idx + {{{ C_STRUCTS.EmscriptenTouchEvent.ctrlKey / 4}}}] = e.ctrlKey;
       HEAP32[idx + {{{ C_STRUCTS.EmscriptenTouchEvent.shiftKey / 4}}}] = e.shiftKey;
@@ -2091,7 +2097,7 @@ var LibraryJSEvents = {
       var targetRect = getBoundingClientRect(target);
       var numTouches = 0;
       for (var i in touches) {
-        var t = touches[i];
+        t = touches[i];
         HEAP32[idx + {{{ C_STRUCTS.EmscriptenTouchPoint.identifier / 4}}}] = t.identifier;
         HEAP32[idx + {{{ C_STRUCTS.EmscriptenTouchPoint.screenX / 4}}}] = t.screenX;
         HEAP32[idx + {{{ C_STRUCTS.EmscriptenTouchPoint.screenY / 4}}}] = t.screenY;
@@ -2174,18 +2180,20 @@ var LibraryJSEvents = {
       {{{ makeSetValue('eventStruct+i*8', C_STRUCTS.EmscriptenGamepadEvent.axis, 'e.axes[i]', 'double') }}};
     }
     for (var i = 0; i < e.buttons.length; ++i) {
-      if (typeof(e.buttons[i]) === 'object') {
+      if (typeof e.buttons[i] == 'object') {
         {{{ makeSetValue('eventStruct+i*8', C_STRUCTS.EmscriptenGamepadEvent.analogButton, 'e.buttons[i].value', 'double') }}};
       } else {
         {{{ makeSetValue('eventStruct+i*8', C_STRUCTS.EmscriptenGamepadEvent.analogButton, 'e.buttons[i]', 'double') }}};
       }
     }
     for (var i = 0; i < e.buttons.length; ++i) {
-      if (typeof(e.buttons[i]) === 'object') {
+      if (typeof e.buttons[i] == 'object') {
         {{{ makeSetValue('eventStruct+i*4', C_STRUCTS.EmscriptenGamepadEvent.digitalButton, 'e.buttons[i].pressed', 'i32') }}};
       } else {
+#if !SAFE_HEAP
         // Assigning a boolean to HEAP32, that's ok, but Closure would like to warn about it:
         /** @suppress {checkTypes} */
+#endif
         {{{ makeSetValue('eventStruct+i*4', C_STRUCTS.EmscriptenGamepadEvent.digitalButton, 'e.buttons[i] == 1', 'i32') }}};
       }
     }
@@ -2325,7 +2333,7 @@ var LibraryJSEvents = {
   emscripten_set_beforeunload_callback_on_thread__sig: 'iii',
   emscripten_set_beforeunload_callback_on_thread__deps: ['$registerBeforeUnloadEventCallback'],
   emscripten_set_beforeunload_callback_on_thread: function(userData, callbackfunc, targetThread) {
-    if (typeof onbeforeunload === 'undefined') return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
+    if (typeof onbeforeunload == 'undefined') return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
     // beforeunload callback can only be registered on the main browser thread, because the page will go away immediately after returning from the handler,
     // and there is no time to start proxying it anywhere.
     if (targetThread !== {{{ cDefine('EM_CALLBACK_THREAD_CONTEXT_MAIN_BROWSER_THREAD') }}}) return {{{ cDefine('EMSCRIPTEN_RESULT_INVALID_PARAM') }}};
@@ -2404,11 +2412,17 @@ var LibraryJSEvents = {
   },
 
 #if USE_PTHREADS
-  emscripten_set_canvas_element_size_calling_thread__deps: ['$JSEvents', 'emscripten_set_offscreencanvas_size_on_target_thread', '$findCanvasEventTarget'],
+  emscripten_set_canvas_element_size_calling_thread__deps: [
+    '$JSEvents',
+#if OFFSCREENCANVAS_SUPPORT
+    'emscripten_set_offscreencanvas_size_on_target_thread',
+#endif
+    '$findCanvasEventTarget'],
   emscripten_set_canvas_element_size_calling_thread: function(target, width, height) {
     var canvas = findCanvasEventTarget(target);
     if (!canvas) return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
 
+#if OFFSCREENCANVAS_SUPPORT
     if (canvas.canvasSharedPtr) {
       // N.B. We hold the canvasSharedPtr info structure as the authoritative source for specifying the size of a canvas
       // since the actual canvas size changes are asynchronous if the canvas is owned by an OffscreenCanvas on another thread.
@@ -2421,13 +2435,16 @@ var LibraryJSEvents = {
 
     if (canvas.offscreenCanvas || !canvas.controlTransferredOffscreen) {
       if (canvas.offscreenCanvas) canvas = canvas.offscreenCanvas;
+#else
+    if (!canvas.controlTransferredOffscreen) {
+#endif
       var autoResizeViewport = false;
       if (canvas.GLctxObject && canvas.GLctxObject.GLctx) {
         var prevViewport = canvas.GLctxObject.GLctx.getParameter(0xBA2 /* GL_VIEWPORT */);
         // TODO: Perhaps autoResizeViewport should only be true if FBO 0 is currently active?
         autoResizeViewport = (prevViewport[0] === 0 && prevViewport[1] === 0 && prevViewport[2] === canvas.width && prevViewport[3] === canvas.height);
 #if GL_DEBUG
-        err('Resizing canvas from ' + canvas.width + 'x' + canvas.height + ' to ' + width + 'x' + height + '. Previous GL viewport size was ' 
+        dbg('Resizing canvas from ' + canvas.width + 'x' + canvas.height + ' to ' + width + 'x' + height + '. Previous GL viewport size was ' 
           + prevViewport + ', so autoResizeViewport=' + autoResizeViewport);
 #endif
       }
@@ -2435,19 +2452,21 @@ var LibraryJSEvents = {
       canvas.height = height;
       if (autoResizeViewport) {
 #if GL_DEBUG
-        err('Automatically resizing GL viewport to cover whole render target ' + width + 'x' + height);
+        dbg('Automatically resizing GL viewport to cover whole render target ' + width + 'x' + height);
 #endif
-        // TODO: Add -s CANVAS_RESIZE_SETS_GL_VIEWPORT=0/1 option (default=1). This is commonly done and several graphics engines depend on this,
+        // TODO: Add -sCANVAS_RESIZE_SETS_GL_VIEWPORT=0/1 option (default=1). This is commonly done and several graphics engines depend on this,
         // but this can be quite disruptive.
         canvas.GLctxObject.GLctx.viewport(0, 0, width, height);
       }
+#if OFFSCREENCANVAS_SUPPORT
     } else if (canvas.canvasSharedPtr) {
       var targetThread = {{{ makeGetValue('canvas.canvasSharedPtr', 8, 'i32') }}};
       _emscripten_set_offscreencanvas_size_on_target_thread(targetThread, target, width, height);
       return {{{ cDefine('EMSCRIPTEN_RESULT_DEFERRED') }}}; // This will have to be done asynchronously
+#endif
     } else {
 #if GL_DEBUG
-      err('canvas.controlTransferredOffscreen but we do not own the canvas, and do not know who has (no canvas.canvasSharedPtr present, an internal bug?)!\n');
+      dbg('canvas.controlTransferredOffscreen but we do not own the canvas, and do not know who has (no canvas.canvasSharedPtr present, an internal bug?)!\n');
 #endif
       return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
     }
@@ -2457,23 +2476,27 @@ var LibraryJSEvents = {
     return {{{ cDefine('EMSCRIPTEN_RESULT_SUCCESS') }}};
   },
 
-  emscripten_set_offscreencanvas_size_on_target_thread_js__deps: ['$stringToNewUTF8', '_emscripten_call_on_thread'],
+  _emscripten_set_offscreencanvas_size__sig: 'iiii',
+#if OFFSCREENCANVAS_SUPPORT
+  _emscripten_set_offscreencanvas_size: 'emscripten_set_canvas_element_size',
+
+  emscripten_set_offscreencanvas_size_on_target_thread_js__deps: ['$stringToNewUTF8', 'emscripten_dispatch_to_thread_', '$withStackSave'],
   emscripten_set_offscreencanvas_size_on_target_thread_js: function(targetThread, targetCanvas, width, height) {
-    var stackTop = stackSave();
-    var varargs = stackAlloc(12);
-    var targetCanvasPtr = 0;
-    if (targetCanvas) {
-      targetCanvasPtr = stringToNewUTF8(targetCanvas);
-    }
-    {{{ makeSetValue('varargs', 0, 'targetCanvasPtr', 'i32')}}};
-    {{{ makeSetValue('varargs', 4, 'width', 'i32')}}};
-    {{{ makeSetValue('varargs', 8, 'height', 'i32')}}};
-    // Note: If we are also a pthread, the call below could theoretically be done synchronously. However if the target pthread is waiting for a mutex from us, then
-    // these two threads will deadlock. At the moment, we'd like to consider that this kind of deadlock would be an Emscripten runtime bug, although if
-    // emscripten_set_canvas_element_size() was documented to require running an event in the queue of thread that owns the OffscreenCanvas, then that might be ok.
-    // (safer this way however)
-    __emscripten_call_on_thread(0, targetThread, {{{ cDefine('EM_PROXIED_RESIZE_OFFSCREENCANVAS') }}}, 0, targetCanvasPtr /* satellite data */, varargs);
-    stackRestore(stackTop);
+    withStackSave(function() {
+      var varargs = stackAlloc(12);
+      var targetCanvasPtr = 0;
+      if (targetCanvas) {
+        targetCanvasPtr = stringToNewUTF8(targetCanvas);
+      }
+      {{{ makeSetValue('varargs', 0, 'targetCanvasPtr', 'i32')}}};
+      {{{ makeSetValue('varargs', 4, 'width', 'i32')}}};
+      {{{ makeSetValue('varargs', 8, 'height', 'i32')}}};
+      // Note: If we are also a pthread, the call below could theoretically be done synchronously. However if the target pthread is waiting for a mutex from us, then
+      // these two threads will deadlock. At the moment, we'd like to consider that this kind of deadlock would be an Emscripten runtime bug, although if
+      // emscripten_set_canvas_element_size() was documented to require running an event in the queue of thread that owns the OffscreenCanvas, then that might be ok.
+      // (safer this way however)
+      _emscripten_dispatch_to_thread_(targetThread, {{{ cDefine('EM_PROXIED_RESIZE_OFFSCREENCANVAS') }}}, 0, targetCanvasPtr /* satellite data */, varargs);
+    });
   },
 
   emscripten_set_offscreencanvas_size_on_target_thread__deps: ['emscripten_set_offscreencanvas_size_on_target_thread_js'],
@@ -2481,6 +2504,14 @@ var LibraryJSEvents = {
     targetCanvas = targetCanvas ? UTF8ToString(targetCanvas) : '';
     _emscripten_set_offscreencanvas_size_on_target_thread_js(targetThread, targetCanvas, width, height);
   },
+#else
+  _emscripten_set_offscreencanvas_size: function(target, width, height) {
+#if ASSERTIONS
+    err('emscripten_set_offscreencanvas_size: Build with -sOFFSCREENCANVAS_SUPPORT=1 to enable transferring canvases to pthreads.');
+#endif
+    return {{{ cDefine('EMSCRIPTEN_RESULT_NOT_SUPPORTED') }}};
+  },
+#endif
 
   emscripten_set_canvas_element_size_main_thread__proxy: 'sync',
   emscripten_set_canvas_element_size_main_thread__sig: 'iiii',
@@ -2491,21 +2522,20 @@ var LibraryJSEvents = {
   emscripten_set_canvas_element_size__sig: 'iiii',
   emscripten_set_canvas_element_size: function(target, width, height) {
 #if GL_DEBUG
-    err('emscripten_set_canvas_element_size(target='+target+',width='+width+',height='+height);
+    dbg('emscripten_set_canvas_element_size(target='+target+',width='+width+',height='+height);
 #endif
     var canvas = findCanvasEventTarget(target);
     if (canvas) {
       return _emscripten_set_canvas_element_size_calling_thread(target, width, height);
-    } else {
-      return _emscripten_set_canvas_element_size_main_thread(target, width, height);
     }
-  }, 
+    return _emscripten_set_canvas_element_size_main_thread(target, width, height);
+  },
 #else
   emscripten_set_canvas_element_size__deps: ['$JSEvents', '$findCanvasEventTarget'],
   emscripten_set_canvas_element_size__sig: 'iiii',
   emscripten_set_canvas_element_size: function(target, width, height) {
 #if GL_DEBUG
-    err('emscripten_set_canvas_element_size(target='+target+',width='+width+',height='+height);
+    dbg('emscripten_set_canvas_element_size(target='+target+',width='+width+',height='+height);
 #endif
     var canvas = findCanvasEventTarget(target);
     if (!canvas) return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
@@ -2518,10 +2548,10 @@ var LibraryJSEvents = {
   },
 #endif
 
-  $setCanvasElementSize__deps: ['emscripten_set_canvas_element_size'],
+  $setCanvasElementSize__deps: ['emscripten_set_canvas_element_size', '$withStackSave'],
   $setCanvasElementSize: function(target, width, height) {
 #if GL_DEBUG
-    err('setCanvasElementSize(target='+target+',width='+width+',height='+height);
+    dbg('setCanvasElementSize(target='+target+',width='+width+',height='+height);
 #endif
     if (!target.controlTransferredOffscreen) {
       target.width = width;
@@ -2529,13 +2559,13 @@ var LibraryJSEvents = {
     } else {
       // This function is being called from high-level JavaScript code instead of asm.js/Wasm,
       // and it needs to synchronously proxy over to another thread, so marshal the string onto the heap to do the call.
-      var stackTop = stackSave();
-      var targetInt = stackAlloc(target.id.length+1);
-      stringToUTF8(target.id, targetInt, target.id.length+1);
-      _emscripten_set_canvas_element_size(targetInt, width, height);
-      stackRestore(stackTop);
+      withStackSave(function() {
+        var targetInt = stackAlloc(target.id.length+1);
+        stringToUTF8(target.id, targetInt, target.id.length+1);
+        _emscripten_set_canvas_element_size(targetInt, width, height);
+      });
     }
-  }, 
+  },
 
 #if USE_PTHREADS
   emscripten_get_canvas_element_size_calling_thread__deps: ['$JSEvents', '$findCanvasEventTarget'],
@@ -2543,6 +2573,7 @@ var LibraryJSEvents = {
     var canvas = findCanvasEventTarget(target);
     if (!canvas) return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
 
+#if OFFSCREENCANVAS_SUPPORT
     if (canvas.canvasSharedPtr) {
       // N.B. Reading the size of the Canvas takes priority from our shared state structure, which is not the actual size.
       // However if is possible that there is a canvas size set event pending on an OffscreenCanvas owned by another thread,
@@ -2554,12 +2585,14 @@ var LibraryJSEvents = {
     } else if (canvas.offscreenCanvas) {
       {{{ makeSetValue('width', 0, 'canvas.offscreenCanvas.width', 'i32') }}};
       {{{ makeSetValue('height', 0, 'canvas.offscreenCanvas.height', 'i32') }}};
-    } else if (!canvas.controlTransferredOffscreen) {
+    } else
+#endif
+    if (!canvas.controlTransferredOffscreen) {
       {{{ makeSetValue('width', 0, 'canvas.width', 'i32') }}};
       {{{ makeSetValue('height', 0, 'canvas.height', 'i32') }}};
     } else {
 #if GL_DEBUG
-      err('canvas.controlTransferredOffscreen but we do not own the canvas, and do not know who has (no canvas.canvasSharedPtr present, an internal bug?)!\n');
+      dbg('canvas.controlTransferredOffscreen but we do not own the canvas, and do not know who has (no canvas.canvasSharedPtr present, an internal bug?)!\n');
 #endif
       return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
     }
@@ -2576,12 +2609,12 @@ var LibraryJSEvents = {
     var canvas = findCanvasEventTarget(target);
     if (canvas) {
       return _emscripten_get_canvas_element_size_calling_thread(target, width, height);
-    } else {
-      return _emscripten_get_canvas_element_size_main_thread(target, width, height);
     }
-  }, 
+    return _emscripten_get_canvas_element_size_main_thread(target, width, height);
+  },
 #else
   emscripten_get_canvas_element_size__deps: ['$JSEvents', '$findCanvasEventTarget'],
+  emscripten_get_canvas_element_size__sig: 'ippp',
   emscripten_get_canvas_element_size: function(target, width, height) {
     var canvas = findCanvasEventTarget(target);
     if (!canvas) return {{{ cDefine('EMSCRIPTEN_RESULT_UNKNOWN_TARGET') }}};
@@ -2591,19 +2624,19 @@ var LibraryJSEvents = {
 #endif
 
   // JavaScript-friendly API, returns pair [width, height]
-  $getCanvasElementSize__deps: ['emscripten_get_canvas_element_size'],
+  $getCanvasElementSize__deps: ['emscripten_get_canvas_element_size', '$withStackSave'],
   $getCanvasElementSize: function(target) {
-    var stackTop = stackSave();
-    var w = stackAlloc(8);
-    var h = w + 4;
+    return withStackSave(function() {
+      var w = stackAlloc(8);
+      var h = w + 4;
 
-    var targetInt = stackAlloc(target.id.length+1);
-    stringToUTF8(target.id, targetInt, target.id.length+1);
-    var ret = _emscripten_get_canvas_element_size(targetInt, w, h);
-    var size = [{{{ makeGetValue('w', 0, 'i32')}}}, {{{ makeGetValue('h', 0, 'i32')}}}];
-    stackRestore(stackTop);
-    return size;
-  }, 
+      var targetInt = stackAlloc(target.id.length+1);
+      stringToUTF8(target.id, targetInt, target.id.length+1);
+      var ret = _emscripten_get_canvas_element_size(targetInt, w, h);
+      var size = [{{{ makeGetValue('w', 0, 'i32')}}}, {{{ makeGetValue('h', 0, 'i32')}}}];
+      return size;
+    });
+  },
 
   emscripten_set_element_css_size__proxy: 'sync',
   emscripten_set_element_css_size__sig: 'iiii',
@@ -2672,141 +2705,7 @@ var LibraryJSEvents = {
     return requestAnimationFrame(tick);
   },
 
-  $polyfillSetImmediate__postset:
-    'var emSetImmediate;\n' +
-    'var emClearImmediate;\n' +
-    'if (typeof setImmediate !== "undefined") {\n' +
-      'emSetImmediate = setImmediate;\n' +
-      'emClearImmediate = clearImmediate;\n' +
-    '} else if (typeof addEventListener === "function") {\n' +
-      'var __setImmediate_id_counter = 0;\n' +
-      'var __setImmediate_queue = [];\n' +
-      'var __setImmediate_message_id = "_si";\n' +
-      'function __setImmediate_cb(e) {\n' +
-        'if (e.data === __setImmediate_message_id) {\n' +
-          'e.stopPropagation();\n' +
-          '__setImmediate_queue.shift()();\n' +
-          '++__setImmediate_id_counter;\n' +
-        '}\n' +
-      '}\n' +
-      'addEventListener("message", __setImmediate_cb, true);\n' +
-      'emSetImmediate = function(func) {\n' +
-        'postMessage(__setImmediate_message_id, "*");\n' +
-        'return __setImmediate_id_counter + __setImmediate_queue.push(func) - 1;\n' +
-      '}\n' +
-      'emClearImmediate = /**@type{function(number=)}*/(function(id) {\n' +
-        'var index = id - __setImmediate_id_counter;\n' +
-        'if (index >= 0 && index < __setImmediate_queue.length) __setImmediate_queue[index] = function() {};\n' + // must preserve the order and count of elements in the queue, so replace the pending callback with an empty function
-      '})\n' +
-    '}',
-
-  $polyfillSetImmediate: function() {
-    // nop, used for its postset to ensure setImmediate() polyfill is
-    // not duplicated between emscripten_set_immediate() and
-    // emscripten_set_immediate_loop() if application links to both of them.
-  },
-
-  emscripten_set_immediate__deps: ['$polyfillSetImmediate', '$callUserCallback',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
-  emscripten_set_immediate: function(cb, userData) {
-    polyfillSetImmediate();
-    {{{ runtimeKeepalivePush(); }}}
-    return emSetImmediate(function() {
-      {{{ runtimeKeepalivePop(); }}}
-      callUserCallback(function() {
-        {{{ makeDynCall('vi', 'cb') }}}(userData);
-      });
-    });
-  },
-
-  emscripten_clear_immediate__deps: ['$polyfillSetImmediate',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePop',
-#endif
-  ],
-  emscripten_clear_immediate: function(id) {
-    {{{ runtimeKeepalivePop(); }}}
-    emClearImmediate(id);
-  },
-
-  emscripten_set_immediate_loop__deps: ['$polyfillSetImmediate', '$callUserCallback',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
-  emscripten_set_immediate_loop: function(cb, userData) {
-    polyfillSetImmediate();
-    function tick() {
-      {{{ runtimeKeepalivePop(); }}}
-      callUserCallback(function() {
-        if ({{{ makeDynCall('ii', 'cb') }}}(userData)) {
-          {{{ runtimeKeepalivePush(); }}}
-          emSetImmediate(tick);
-        }
-      });
-    }
-    {{{ runtimeKeepalivePush(); }}}
-    return emSetImmediate(tick);
-  },
-
-  emscripten_set_timeout__deps: ['$callUserCallback',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
-  emscripten_set_timeout: function(cb, msecs, userData) {
-    {{{ runtimeKeepalivePush() }}}
-    return setTimeout(function() {
-      {{{ runtimeKeepalivePop() }}}
-      callUserCallback(function() {
-        {{{ makeDynCall('vi', 'cb') }}}(userData);
-      });
-    }, msecs);
-  },
-
-  emscripten_clear_timeout: function(id) {
-    clearTimeout(id);
-  },
-
-  emscripten_set_timeout_loop: function(cb, msecs, userData) {
-    function tick() {
-      var t = performance.now();
-      var n = t + msecs;
-      if ({{{ makeDynCall('idi', 'cb') }}}(t, userData)) {
-        // Save a little bit of code space: modern browsers should treat
-        // negative setTimeout as timeout of 0
-        // (https://stackoverflow.com/questions/8430966/is-calling-settimeout-with-a-negative-delay-ok)
-        setTimeout(tick, n - performance.now());
-      }
-    }
-    return setTimeout(tick, 0);
-  },
-
-  emscripten_set_interval__deps: ['$callUserCallback',
-#if !MINIMAL_RUNTIME
-    '$runtimeKeepalivePush', '$runtimeKeepalivePop',
-#endif
-  ],
-  emscripten_set_interval: function(cb, msecs, userData) {
-    {{{ runtimeKeepalivePush() }}}
-    return setInterval(function() {
-      callUserCallback(function() {
-        {{{ makeDynCall('vi', 'cb') }}}(userData)
-      });
-    }, msecs);
-  },
-
-#if !MINIMAL_RUNTIME
-  emscripten_clear_interval__deps: ['$runtimeKeepalivePop'],
-#endif
-  emscripten_clear_interval: function(id) {
-    {{{ runtimeKeepalivePop() }}}
-    clearInterval(id);
-  },
-
+  emscripten_date_now__sig: 'd',
   emscripten_date_now: function() {
     return Date.now();
   },
@@ -2815,47 +2714,11 @@ var LibraryJSEvents = {
     return performance.now();
   },
 
-  emscripten_console_log: function(str) {
-#if ASSERTIONS
-    assert(typeof str === 'number');
-#endif
-    out(UTF8ToString(str));
-  },
-
-  emscripten_console_warn: function(str) {
-#if ASSERTIONS
-    assert(typeof str === 'number');
-#endif
-    console.warn(UTF8ToString(str));
-  },
-
-  emscripten_console_error: function(str) {
-#if ASSERTIONS
-    assert(typeof str === 'number');
-#endif
-    err(UTF8ToString(str));
-  },
-
-  emscripten_throw_number: function(number) {
-    throw number;
-  },
-
-  emscripten_throw_string: function(str) {
-#if ASSERTIONS
-    assert(typeof str === 'number');
-#endif
-    throw UTF8ToString(str);
-  },
-
-  emscripten_unwind_to_js_event_loop: function() {
-    throw 'unwind';
-  },
-
   emscripten_get_device_pixel_ratio__proxy: 'sync',
   emscripten_get_device_pixel_ratio__sig: 'd',
   emscripten_get_device_pixel_ratio: function() {
 #if ENVIRONMENT_MAY_BE_NODE || ENVIRONMENT_MAY_BE_SHELL
-    return (typeof devicePixelRatio === 'number' && devicePixelRatio) || 1.0;
+    return (typeof devicePixelRatio == 'number' && devicePixelRatio) || 1.0;
 #else // otherwise, on the web and in workers, things are simpler
 #if MIN_IE_VERSION < 11 || MIN_FIREFOX_VERSION < 18 || MIN_CHROME_VERSION < 4 || MIN_SAFARI_VERSION < 30100 // https://caniuse.com/#feat=devicepixelratio
     return window.devicePixelRatio || 1.0;
@@ -2866,4 +2729,4 @@ var LibraryJSEvents = {
   }
 };
 
-mergeInto(LibraryManager.library, LibraryJSEvents);
+mergeInto(LibraryManager.library, LibraryHTML5);

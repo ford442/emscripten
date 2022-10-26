@@ -23,7 +23,11 @@ set_property(GLOBAL PROPERTY TARGET_SUPPORTS_SHARED_LIBS FALSE)
 # Advertise Emscripten as a 32-bit platform (as opposed to
 # CMAKE_SYSTEM_PROCESSOR=x86_64 for 64-bit platform), since some projects (e.g.
 # OpenCV) use this to detect bitness.
-set(CMAKE_SYSTEM_PROCESSOR x86)
+# Allow users to ovewrite this on the command line with -DEMSCRIPTEN_SYSTEM_PROCESSOR=arm.
+if ("${EMSCRIPTEN_SYSTEM_PROCESSOR}" STREQUAL "")
+  set(EMSCRIPTEN_SYSTEM_PROCESSOR x86)
+endif()
+set(CMAKE_SYSTEM_PROCESSOR ${EMSCRIPTEN_SYSTEM_PROCESSOR})
 
 # Tell CMake how it should instruct the compiler to generate multiple versions
 # of an outputted .so library: e.g. "libfoo.so, libfoo.so.1, libfoo.so.1.4" etc.
@@ -83,35 +87,30 @@ else()
 endif()
 
 # Specify the compilers to use for C and C++
-if ("${CMAKE_C_COMPILER}" STREQUAL "")
-  set(CMAKE_C_COMPILER "${EMSCRIPTEN_ROOT_PATH}/emcc${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten emcc")
-endif()
-if ("${CMAKE_CXX_COMPILER}" STREQUAL "")
-  set(CMAKE_CXX_COMPILER "${EMSCRIPTEN_ROOT_PATH}/em++${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten em++")
+set(CMAKE_C_COMPILER "${EMSCRIPTEN_ROOT_PATH}/emcc${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten emcc")
+set(CMAKE_CXX_COMPILER "${EMSCRIPTEN_ROOT_PATH}/em++${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten em++")
+set(CMAKE_AR "${EMSCRIPTEN_ROOT_PATH}/emar${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten ar")
+set(CMAKE_RANLIB "${EMSCRIPTEN_ROOT_PATH}/emranlib${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten ranlib")
+set(CMAKE_C_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Emscripten ar")
+set(CMAKE_CXX_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Emscripten ar")
+set(CMAKE_C_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Emscripten ranlib")
+set(CMAKE_CXX_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Emscripten ranlib")
+
+# Capture the Emscripten version to EMSCRIPTEN_VERSION variable.
+if (NOT EMSCRIPTEN_VERSION)
+  execute_process(COMMAND "${CMAKE_C_COMPILER}" "-v" RESULT_VARIABLE _cmake_compiler_result ERROR_VARIABLE _cmake_compiler_output OUTPUT_QUIET)
+  if (NOT _cmake_compiler_result EQUAL 0)
+    message(FATAL_ERROR "Failed to fetch Emscripten version information with command \"'${CMAKE_C_COMPILER}' -v\"! Process returned with error code ${_cmake_compiler_result}.")
+  endif()
+  string(REGEX MATCH "emcc \\(.*\\) ([0-9\\.]+)" _dummy_unused "${_cmake_compiler_output}")
+  if (NOT CMAKE_MATCH_1)
+    message(FATAL_ERROR "Failed to regex parse Emscripten compiler version from version string: ${_cmake_compiler_output}")
+  endif()
+
+  set(EMSCRIPTEN_VERSION "${CMAKE_MATCH_1}")
 endif()
 
-if ("${CMAKE_AR}" STREQUAL "")
-  set(CMAKE_AR "${EMSCRIPTEN_ROOT_PATH}/emar${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten ar")
-endif()
-
-if ("${CMAKE_RANLIB}" STREQUAL "")
-  set(CMAKE_RANLIB "${EMSCRIPTEN_ROOT_PATH}/emranlib${EMCC_SUFFIX}" CACHE FILEPATH "Emscripten ranlib")
-endif()
-
-if ("${CMAKE_C_COMPILER_AR}" STREQUAL "")
-  set(CMAKE_C_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Emscripten ar")
-endif()
-if ("${CMAKE_CXX_COMPILER_AR}" STREQUAL "")
-  set(CMAKE_CXX_COMPILER_AR "${CMAKE_AR}" CACHE FILEPATH "Emscripten ar")
-endif()
-if ("${CMAKE_C_COMPILER_RANLIB}" STREQUAL "")
-  set(CMAKE_C_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Emscripten ranlib")
-endif()
-if ("${CMAKE_CXX_COMPILER_RANLIB}" STREQUAL "")
-  set(CMAKE_CXX_COMPILER_RANLIB "${CMAKE_RANLIB}" CACHE FILEPATH "Emscripten ranlib")
-endif()
-
-# Don't allow CMake to autodetect the compiler, since it does not understand
+# Don't allow CMake to autodetect the compiler, since this is quite slow with
 # Emscripten.
 # Pass -DEMSCRIPTEN_FORCE_COMPILERS=OFF to disable (sensible mostly only for
 # testing/debugging purposes).
@@ -143,20 +142,6 @@ if (EMSCRIPTEN_FORCE_COMPILERS)
     endif()
   endif()
 
-  # Capture the Emscripten version to EMSCRIPTEN_VERSION variable.
-  if (NOT EMSCRIPTEN_VERSION)
-    execute_process(COMMAND "${CMAKE_C_COMPILER}" "-v" RESULT_VARIABLE _cmake_compiler_result ERROR_VARIABLE _cmake_compiler_output OUTPUT_QUIET)
-    if (NOT _cmake_compiler_result EQUAL 0)
-      message(FATAL_ERROR "Failed to fetch Emscripten version information with command \"'${CMAKE_C_COMPILER}' -v\"! Process returned with error code ${_cmake_compiler_result}.")
-    endif()
-    string(REGEX MATCH "emcc \\(.*\\) ([0-9\\.]+)" _dummy_unused "${_cmake_compiler_output}")
-    if (NOT CMAKE_MATCH_1)
-      message(FATAL_ERROR "Failed to regex parse Emscripten compiler version from version string: ${_cmake_compiler_output}")
-    endif()
-
-    set(EMSCRIPTEN_VERSION "${CMAKE_MATCH_1}")
-  endif()
-
   set(CMAKE_C_COMPILER_ID_RUN TRUE)
   set(CMAKE_C_COMPILER_FORCED TRUE)
   set(CMAKE_C_COMPILER_WORKS TRUE)
@@ -184,26 +169,33 @@ if (EMSCRIPTEN_FORCE_COMPILERS)
     set(CMAKE_CXX98_COMPILE_FEATURES "cxx_template_template_parameters")
     set(CMAKE_CXX11_COMPILE_FEATURES "cxx_alias_templates;cxx_alignas;cxx_alignof;cxx_attributes;cxx_auto_type;cxx_constexpr;cxx_decltype;cxx_decltype_incomplete_return_types;cxx_default_function_template_args;cxx_defaulted_functions;cxx_defaulted_move_initializers;cxx_delegating_constructors;cxx_deleted_functions;cxx_enum_forward_declarations;cxx_explicit_conversions;cxx_extended_friend_declarations;cxx_extern_templates;cxx_final;cxx_func_identifier;cxx_generalized_initializers;cxx_inheriting_constructors;cxx_inline_namespaces;cxx_lambdas;cxx_local_type_template_args;cxx_long_long_type;cxx_noexcept;cxx_nonstatic_member_init;cxx_nullptr;cxx_override;cxx_range_for;cxx_raw_string_literals;cxx_reference_qualified_functions;cxx_right_angle_brackets;cxx_rvalue_references;cxx_sizeof_member;cxx_static_assert;cxx_strong_enums;cxx_thread_local;cxx_trailing_return_types;cxx_unicode_literals;cxx_uniform_initialization;cxx_unrestricted_unions;cxx_user_literals;cxx_variadic_macros;cxx_variadic_templates")
     set(CMAKE_CXX14_COMPILE_FEATURES "cxx_aggregate_default_initializers;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_return_type_deduction;cxx_variable_templates")
-  else()
-    set(CMAKE_C_COMPILE_FEATURES "c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert")
+  else() # 3.8+
     set(CMAKE_C90_COMPILE_FEATURES "c_std_90;c_function_prototypes")
     set(CMAKE_C99_COMPILE_FEATURES "c_std_99;c_restrict;c_variadic_macros")
     set(CMAKE_C11_COMPILE_FEATURES "c_std_11;c_static_assert")
-
 
     set(CMAKE_CXX98_COMPILE_FEATURES "cxx_std_98;cxx_template_template_parameters")
     set(CMAKE_CXX11_COMPILE_FEATURES "cxx_std_11;cxx_alias_templates;cxx_alignas;cxx_alignof;cxx_attributes;cxx_auto_type;cxx_constexpr;cxx_decltype;cxx_decltype_incomplete_return_types;cxx_default_function_template_args;cxx_defaulted_functions;cxx_defaulted_move_initializers;cxx_delegating_constructors;cxx_deleted_functions;cxx_enum_forward_declarations;cxx_explicit_conversions;cxx_extended_friend_declarations;cxx_extern_templates;cxx_final;cxx_func_identifier;cxx_generalized_initializers;cxx_inheriting_constructors;cxx_inline_namespaces;cxx_lambdas;cxx_local_type_template_args;cxx_long_long_type;cxx_noexcept;cxx_nonstatic_member_init;cxx_nullptr;cxx_override;cxx_range_for;cxx_raw_string_literals;cxx_reference_qualified_functions;cxx_right_angle_brackets;cxx_rvalue_references;cxx_sizeof_member;cxx_static_assert;cxx_strong_enums;cxx_thread_local;cxx_trailing_return_types;cxx_unicode_literals;cxx_uniform_initialization;cxx_unrestricted_unions;cxx_user_literals;cxx_variadic_macros;cxx_variadic_templates")
     set(CMAKE_CXX14_COMPILE_FEATURES "cxx_std_14;cxx_aggregate_default_initializers;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_return_type_deduction;cxx_variable_templates")
     set(CMAKE_CXX17_COMPILE_FEATURES "cxx_std_17")
-    if ("${CMAKE_VERSION}" VERSION_LESS "3.12")
+    if ("${CMAKE_VERSION}" VERSION_LESS "3.12") # [3.8, 3.12)
+      set(CMAKE_C_COMPILE_FEATURES "c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert")
       set(CMAKE_CXX_COMPILE_FEATURES "cxx_std_98;cxx_template_template_parameters;cxx_std_11;cxx_alias_templates;cxx_alignas;cxx_alignof;cxx_attributes;cxx_auto_type;cxx_constexpr;cxx_decltype;cxx_decltype_incomplete_return_types;cxx_default_function_template_args;cxx_defaulted_functions;cxx_defaulted_move_initializers;cxx_delegating_constructors;cxx_deleted_functions;cxx_enum_forward_declarations;cxx_explicit_conversions;cxx_extended_friend_declarations;cxx_extern_templates;cxx_final;cxx_func_identifier;cxx_generalized_initializers;cxx_inheriting_constructors;cxx_inline_namespaces;cxx_lambdas;cxx_local_type_template_args;cxx_long_long_type;cxx_noexcept;cxx_nonstatic_member_init;cxx_nullptr;cxx_override;cxx_range_for;cxx_raw_string_literals;cxx_reference_qualified_functions;cxx_right_angle_brackets;cxx_rvalue_references;cxx_sizeof_member;cxx_static_assert;cxx_strong_enums;cxx_thread_local;cxx_trailing_return_types;cxx_unicode_literals;cxx_uniform_initialization;cxx_unrestricted_unions;cxx_user_literals;cxx_variadic_macros;cxx_variadic_templates;cxx_std_14;cxx_aggregate_default_initializers;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_return_type_deduction;cxx_variable_templates;cxx_std_17")
-    else()
+    else() # 3.12+
       set(CMAKE_CXX20_COMPILE_FEATURES "cxx_std_20")
-      if ("${CMAKE_VERSION}" VERSION_LESS "3.20")
+      if ("${CMAKE_VERSION}" VERSION_LESS "3.20") # [3.12, 3.20)
+        set(CMAKE_C_COMPILE_FEATURES "c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert")
         set(CMAKE_CXX_COMPILE_FEATURES "cxx_std_98;cxx_template_template_parameters;cxx_std_11;cxx_alias_templates;cxx_alignas;cxx_alignof;cxx_attributes;cxx_auto_type;cxx_constexpr;cxx_decltype;cxx_decltype_incomplete_return_types;cxx_default_function_template_args;cxx_defaulted_functions;cxx_defaulted_move_initializers;cxx_delegating_constructors;cxx_deleted_functions;cxx_enum_forward_declarations;cxx_explicit_conversions;cxx_extended_friend_declarations;cxx_extern_templates;cxx_final;cxx_func_identifier;cxx_generalized_initializers;cxx_inheriting_constructors;cxx_inline_namespaces;cxx_lambdas;cxx_local_type_template_args;cxx_long_long_type;cxx_noexcept;cxx_nonstatic_member_init;cxx_nullptr;cxx_override;cxx_range_for;cxx_raw_string_literals;cxx_reference_qualified_functions;cxx_right_angle_brackets;cxx_rvalue_references;cxx_sizeof_member;cxx_static_assert;cxx_strong_enums;cxx_thread_local;cxx_trailing_return_types;cxx_unicode_literals;cxx_uniform_initialization;cxx_unrestricted_unions;cxx_user_literals;cxx_variadic_macros;cxx_variadic_templates;cxx_std_14;cxx_aggregate_default_initializers;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_return_type_deduction;cxx_variable_templates;cxx_std_17;cxx_std_20")
-      else()
+      else() # 3.20+
         set(CMAKE_CXX23_COMPILE_FEATURES "cxx_std_23")
         set(CMAKE_CXX_COMPILE_FEATURES "cxx_std_98;cxx_template_template_parameters;cxx_std_11;cxx_alias_templates;cxx_alignas;cxx_alignof;cxx_attributes;cxx_auto_type;cxx_constexpr;cxx_decltype;cxx_decltype_incomplete_return_types;cxx_default_function_template_args;cxx_defaulted_functions;cxx_defaulted_move_initializers;cxx_delegating_constructors;cxx_deleted_functions;cxx_enum_forward_declarations;cxx_explicit_conversions;cxx_extended_friend_declarations;cxx_extern_templates;cxx_final;cxx_func_identifier;cxx_generalized_initializers;cxx_inheriting_constructors;cxx_inline_namespaces;cxx_lambdas;cxx_local_type_template_args;cxx_long_long_type;cxx_noexcept;cxx_nonstatic_member_init;cxx_nullptr;cxx_override;cxx_range_for;cxx_raw_string_literals;cxx_reference_qualified_functions;cxx_right_angle_brackets;cxx_rvalue_references;cxx_sizeof_member;cxx_static_assert;cxx_strong_enums;cxx_thread_local;cxx_trailing_return_types;cxx_unicode_literals;cxx_uniform_initialization;cxx_unrestricted_unions;cxx_user_literals;cxx_variadic_macros;cxx_variadic_templates;cxx_std_14;cxx_aggregate_default_initializers;cxx_attribute_deprecated;cxx_binary_literals;cxx_contextual_conversions;cxx_decltype_auto;cxx_digit_separators;cxx_generic_lambdas;cxx_lambda_init_captures;cxx_relaxed_constexpr;cxx_return_type_deduction;cxx_variable_templates;cxx_std_17;cxx_std_20;cxx_std_23")
+        if ("${CMAKE_VERSION}" VERSION_LESS "3.21") # 3.20
+          set(CMAKE_C_COMPILE_FEATURES "c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert")
+        else() # 3.21+
+          set(CMAKE_C17_COMPILE_FEATURES "c_std_17")
+          set(CMAKE_C23_COMPILE_FEATURES "c_std_23")
+          set(CMAKE_C_COMPILE_FEATURES "c_std_90;c_function_prototypes;c_std_99;c_restrict;c_variadic_macros;c_std_11;c_static_assert;c_std_17;c_std_23")
+        endif()
       endif()
     endif()
   endif()
@@ -216,12 +208,17 @@ execute_process(COMMAND "${EMSCRIPTEN_ROOT_PATH}/em-config${EMCC_SUFFIX}" "CACHE
 if (NOT _emcache_result EQUAL 0)
   message(FATAL_ERROR "Failed to find emscripten cache directory with command \"'${EMSCRIPTEN_ROOT_PATH}/em-config${EMCC_SUFFIX}' CACHE\"! Process returned with error code ${_emcache_result}.")
 endif()
+file(TO_CMAKE_PATH "${_emcache_output}" _emcache_output)
 set(EMSCRIPTEN_SYSROOT "${_emcache_output}/sysroot")
 
 list(APPEND CMAKE_FIND_ROOT_PATH "${EMSCRIPTEN_SYSROOT}")
 list(APPEND CMAKE_SYSTEM_PREFIX_PATH /)
 
-set(CMAKE_LIBRARY_ARCHITECTURE "wasm32-emscripten")
+if ($ENV{CFLAGS} MATCHES "MEMORY64")
+  set(CMAKE_LIBRARY_ARCHITECTURE "wasm64-emscripten")
+else()
+  set(CMAKE_LIBRARY_ARCHITECTURE "wasm32-emscripten")
+endif()
 
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set(CMAKE_INSTALL_PREFIX "${EMSCRIPTEN_SYSROOT}" CACHE PATH
@@ -245,6 +242,19 @@ endif()
 if (NOT CMAKE_FIND_ROOT_PATH_MODE_PACKAGE)
   set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 endif()
+
+set(_em_pkgconfig_libdir "${EMSCRIPTEN_SYSROOT}/local/lib/pkgconfig" "${EMSCRIPTEN_SYSROOT}/lib/pkgconfig")
+if("${CMAKE_VERSION}" VERSION_LESS "3.20")
+  file(TO_NATIVE_PATH "${_em_pkgconfig_libdir}" _em_pkgconfig_libdir)
+  if(CMAKE_HOST_UNIX)
+    string(REPLACE ";" ":" _em_pkgconfig_libdir "${_em_pkgconfig_libdir}")
+    string(REPLACE "\\ " " " _em_pkgconfig_libdir "${_em_pkgconfig_libdir}")
+  endif()
+else()
+  cmake_path(CONVERT "${_em_pkgconfig_libdir}" TO_NATIVE_PATH_LIST _em_pkgconfig_libdir)
+endif()
+set(ENV{PKG_CONFIG_LIBDIR} "${_em_pkgconfig_libdir}")
+unset(_em_pkgconfig_libdir)
 
 option(EMSCRIPTEN_GENERATE_BITCODE_STATIC_LIBRARIES "If set, static library targets generate LLVM bitcode files (.bc). If disabled (default), UNIX ar archives (.a) are generated." OFF)
 if (EMSCRIPTEN_GENERATE_BITCODE_STATIC_LIBRARIES)
@@ -405,3 +415,12 @@ endif()
 # complain about unused CMake variable.
 if (CMAKE_CROSSCOMPILING_EMULATOR)
 endif()
+
+# TODO: CMake appends <sysroot>/usr/include to implicit includes; switching to use usr/include will make this redundant.
+if ("${CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES}" STREQUAL "")
+  set(CMAKE_C_IMPLICIT_INCLUDE_DIRECTORIES "${EMSCRIPTEN_SYSROOT}/include")
+endif()
+if ("${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES}" STREQUAL "")
+  set(CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES "${EMSCRIPTEN_SYSROOT}/include")
+endif()
+unset(_em_sysroot_include)
